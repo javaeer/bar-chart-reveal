@@ -1,6 +1,6 @@
 {
   "name": "bar-chart-reveal",
-  "version": "2.2.0",
+  "version": "2.3.1",
   "description": "配置驱动的 3D 柱状赛跑可视化与出片工具（Vue3 + ECharts-GL，任意数据集/主题/标题）",
   "type": "module",
   "scripts": {

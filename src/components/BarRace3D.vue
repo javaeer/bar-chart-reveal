@@ -49,18 +49,33 @@ const BAR_W_MAX = 0.70; // 世界柱宽上限（相对步距）
 const BAR_D = 0.62; // 柱深 / 步距（基准）
 const GLOW_K = 1.22; // 光晕层相对主体放大
 const ZMAX = 1.18; // z 轴数据上限（含回弹余量）
-const FOV = 50;
-// 跟随时可视宽度内应容纳的"柱位"数（越少越贴脸、柱子越大）。约 = 同时看到的柱数。
-const FOLLOW_NEAR = 5.0;
+// —— FOV 16（远焦"长焦镜头"）——
+// 【修复：跟随期柱子巨大、倾斜、裁底】旧值 FOV=50（广角）下，画面边缘柱体的
+// 透视倾斜可达 ~40°（hFOV 半角），且"同时 5 根柱同框"的近距构图让柱体占满
+// 全屏、上下双向裁切、地面线完全不可见。长焦（16°）把边缘透视压到 ~14°，
+// 柱体近乎平行排列，观感接近规范的数据可视化而非"贴脸特写"。
+// 相机距离按 1/tan(FOV/2) 等比放大（FOLLOW_NEAR 同框数同步上调），场景单位
+// 几何不变，因此构图逻辑与任意 n 兼容。
+const FOV = 16;
+// 跟随时可视宽度内应容纳的"柱位"数（参考值，用于推导固定距离）。
+// 跟随期相机距离固定为 FOLLOW_DIST（见下），水平同框柱数随视口 aspect
+// 自适应：16:9 ≈ 5.4 根、≈2:1 ≈ 6 根、竖屏更少——构图语义稳定。
+const FOLLOW_NEAR = 6.0;
+// —— 跟随期相机距离（场景单位，固定值）——
+// 【为什么固定而不是按 aspect 反推】注视点高度 cy=-1.2 的"地面线 ~85% 屏高"
+// 是在固定 distance 下实测标定的（echarts-gl 的垂直投影随 distance 变化，
+// 见 scripts/qa/diag-calib2.mjs）；若 distance 随 aspect 反推（旧行为），
+// 16:9 与 2:1 视口下地面线位置漂移达 13% 屏高，柱体会重新出画。
+// 固定后垂直构图对所有 aspect 一致。87 ≈ FOLLOW_NEAR×S/visFactor(aspect≈1.96)。
+const FOLLOW_DIST = 87;
 // 单根柱宽占"跟随期可视宽"的目标比例上限——决定柱子有多粗壮显眼。
 const BAR_FRAME_W = 0.14;
-// 最高柱占"跟随期可视高"的比例——决定构图是否居中、是否入画
-// （0.78 留出顶部 headroom，避免最高柱顶端与标签被画面裁掉）
-const CORE_FILL = 0.78;
-// 相机俯仰角（度）：必须足够大才能"俯视"看到地面线与柱体立面，否则柱子会被
-// 裁掉底部、看起来像悬空方块。32~38 为佳（配合下方注视点高度求解）。
-const ALPHA_FOLLOW = 33;
-const ALPHA_WIDE = 30;
+// 最高柱占"跟随期可视高"的比例——留出上下余量给标签与地面线（防裁顶/裁底）。
+const CORE_FILL = 0.66;
+// 相机俯仰角（度）：小俯角近"平视"，柱体立面完整、竖直棱线竖直；
+// 全景期略加大俯角以带回 3D 顶面进深感。
+const ALPHA_FOLLOW = 18;
+const ALPHA_WIDE = 22;
 // 最矮柱的 高/宽 下限（保证"最矮柱也是有体积的柱体"而非薄片）
 const MIN_HW = 1.20;
 // 全景：柱体外接框（含光晕）目标占画面宽（硬指标 ≥0.62，留余量）
@@ -69,8 +84,15 @@ const WIDE_VIS = 0.72;
 // 多数柱体被压成"纸片"。设 FLOOR 后最小柱体也保留可见高度，但 ratio=1 时高度不变、
 // local=0 时仍为 0（出现动画不受影响）、升序语义与颜色/标签所用的真实 ratio 不变。
 const H_FLOOR = 0.30;
-// 标签密度：n 较大时只给"名次靠前 + 高亮 + 活跃"贴标签，避免 28 项糊成一片
-const LABEL_MAX_ALL = 12;
+// 标签密度：n ≤ LABEL_MAX_ALL 时全部贴标签（14 乡镇等常规数据集应"每根柱子都有
+// 名字"——此前 12 的阈值导致 14 项数据只有 rank≤8 的柱子带标签，被用户报为缺陷）；
+// n 更大时按"全景柱距像素 vs 实测标签宽"自适应步距稀疏铺满（见 computeFrame 标签选取段），
+// 避免"28 项数据全景期只有 4 个标签"（v2.3.0 的 labelTopN 平方根公式下限 4，被用户报为缺陷）。
+const LABEL_MAX_ALL = 16;
+// 跟随期标签窗口半径（柱数）：活跃柱 ±N 根全部贴标签。跟随期同框约 5.4 根
+// （visW≈50 世界单位 / S=8），±4 已覆盖全部可见柱并留 1 根缓冲；跟随期柱距
+// 像素 ≈ 356px ≫ 标签宽 ~120px，窗口全显不会重叠。仅跟随期(t ≤ reveal)生效。
+const FOLLOW_LABEL_WIN = 4;
 
 // —— 标签字体（单一真源）——
 // 中文字体必须显式声明：无头环境下 font-family 若解析到不含中文字形的字体，
@@ -137,9 +159,8 @@ function computeFrame(tRaw) {
   const aspectC = clamp(aspect, 1.15, 2.2);
   const visFactor = 2 * Math.tan((FOV / 2) * Math.PI / 180) * aspectC;
 
-  // —— ① 跟随距离：由"希望同时看到 FOLLOW_NEAR 根柱"反推 ——
-  //  可视宽 = followDist * visFactor ≈ FOLLOW_NEAR * 步距 → 决定柱子多大。
-  const followDist = Math.max((FOLLOW_NEAR * S) / visFactor, S * 2.0);
+  // —— ① 跟随距离：固定值（见 FOLLOW_DIST 注释）——
+  const followDist = Math.max(FOLLOW_DIST, S * 2.0);
   const visW = followDist * visFactor;                        // 跟随期可视宽（世界）
   const visH = 2 * followDist * Math.tan((FOV / 2) * Math.PI / 180); // 跟随期可视高
 
@@ -214,18 +235,49 @@ function computeFrame(tRaw) {
   });
 
   // —— 标签选取（常量逐项 label，规避函数式配置被忽略的问题）——
-  // n ≤ 12 全部显示；n > 12 只给"名次靠前 + 高亮 + 当前活跃 + 已出现"的贴标签，避免糊字。
-  // 额外：用显式字体的 measureText 估算标签宽度，过宽的名称进一步收窄，
-  // 从源头避免"标签比柱子还宽 → 挤压换行"（任务二 label_overflow 防护）。
+  // 【三层策略】（v2.3.1 重构：修复"28 项数据全景期只有 4 个标签"——用户录屏报缺陷）
+  //   a) n ≤ LABEL_MAX_ALL：全部贴标签（海拔 7 项 / 面积 14 项 → 每根柱子都有名字）；
+  //   b) n 更大时按"全景柱距像素 vs 实测标签宽"自适应步距 stride 稀疏铺满：
+  //      标签比柱距宽就隔 stride 根显示一个，队首(i=0)必显、队尾(i=n-1)按半步距
+  //      补位必显（第 1 名在最右侧，观众最关心）。1920 宽 / 28 项 / 最长名 7 字：
+  //      pitch≈51px、标签宽≈118px → stride=3 → 约 10 个标签、间距 153px，不重叠；
+  //      （旧公式 labelTopN=max(4,round(16/√n)) 在 n=28 时只给 4 个标签，24/28 秃柱）
+  //   c) 跟随期(t ≤ reveal)活跃柱 ±FOLLOW_LABEL_WIN 全部显示——同框仅 ~5 根、
+  //      柱距 ~356px，空间充足；观众正在逐个讲解的阶段应"每根可见柱子都有名字"。
+  // 另外：用显式字体的 measureText 估算标签宽度，过宽的名称逐字回缩加省略号
+  // （任务二 label_overflow 防护）。
   const maxLabelW = Math.max(120, el.value ? el.value.clientWidth * 0.22 : 300);
-  const labelTopN = n <= 18 ? 8 : Math.max(4, Math.round(16 / Math.sqrt(n)));
+  // 全景期柱距（像素）：全景外接框宽 = 视口宽 × WIDE_VIS，均摊到 (n-1) 个柱距
+  const pitchPx = (el.value && el.value.clientWidth ? el.value.clientWidth * WIDE_VIS : 920) / Math.max(n - 1, 1);
+  // 实测最大标签宽（名称行 / 数值行取大者）——stride 据此保证相邻标签不相撞
+  let maxTagW = 0;
+  for (const b of bars) {
+    const vt = b.real.toFixed(Number(props.fixed) || 0) + (props.unit || '');
+    maxTagW = Math.max(maxTagW, measureTextWidth(b.name), measureTextWidth(vt));
+  }
+  // 步距 = ceil(标签宽 / 柱距)，上限 6 防止极端宽标签/窄视口下标签全灭
+  const stride = clamp(Math.ceil(maxTagW / Math.max(pitchPx, 1)), 1, 6);
+  const isFollowPhase = t <= reveal;
+  const showFlags = new Array(n).fill(false);
+  // b) stride 稀疏铺满：从队首起每 stride 根显示一个
+  let lastShown = -Infinity;
+  for (let i = 0; i < n; i++) {
+    if (i - lastShown >= stride) { showFlags[i] = true; lastShown = i; }
+  }
+  // 队尾补位：第 1 名（最右柱）距上一显示位不足整步距时，按半步距判断补显
+  if (!showFlags[n - 1] && (n - 1 - lastShown) >= stride / 2) showFlags[n - 1] = true;
+  // 保底强制位：高亮主角柱（hl，如"会师镇"）与当前活跃柱——最多引入 1~2 处
+  // 单点重叠，但主角名字绝不能缺席（科普视频的核心信息点）
+  if (bars[activeIdx]) showFlags[activeIdx] = true;
+  bars.forEach((b, i) => { if (b.hl) showFlags[i] = true; });
+  // c) 跟随期窗口：活跃柱 ±WIN 全显
+  if (isFollowPhase) {
+    for (let i = Math.max(0, activeIdx - FOLLOW_LABEL_WIN); i <= Math.min(n - 1, activeIdx + FOLLOW_LABEL_WIN); i++) {
+      showFlags[i] = true;
+    }
+  }
   bars.forEach((b, i) => {
-    b.showLabel = b.shown && (
-      n <= LABEL_MAX_ALL ||
-      b.rank <= labelTopN ||
-      b.hl ||
-      i === activeIdx
-    );
+    b.showLabel = b.shown && showFlags[i];
     if (b.showLabel) {
       const valueText = b.real.toFixed(Number(props.fixed) || 0) + (props.unit || '');
       // 测量前显式设置 ctx.font（见 measureTextWidth）；超宽则按比例收缩名称
@@ -265,52 +317,43 @@ function computeFrame(tRaw) {
     ? lerp(prevBar.worldX * S, curBar.worldX * S, easeInOut(fracIn))
     : cxFollowRaw;
 
-  // 垂直中心（注视点高度 cy）：让"地面线"稳定落在画面下方固定位置。
-  // 【为什么用经验标定而不是解析反解】
-  //   echarts-gl 的 viewControl 投影并非标准透视（其 center 为轨道目标点，实际
-  //   垂直映射与 fov/box 共同作用），解析式与其偏差达 300px 量级，不可用。
-  //   因此这里采用「离线标定 + 线性插值」：固定 distance 与 n 时，实测发现
-  //   地面线屏幕高度 groundY ≈ A(alpha) + B(alpha)·cy 严格线性（R²≈1）。
-  //   下表由真实渲染逐帧实测得到（alpha ∈ {30,34,38,42}，dist≈24.13，H=900）。
-  //   标定脚本见仓库 scripts/calib-camera.md（可复现）。
-  const worldH = boxH / ZMAX;
-  const GROUND_FRAC = 0.885; // 地面线目标屏幕高度占比（0=顶 1=底）→ 底部留白 ~10%
-  const _H = 900; // 标定分辨率（按比例换算到实际高分辨率即可，插值与分辨率无关）
-  // alpha → [A, B]，A=截距(px)，B=每单位 cy 的像素斜率
-  const CAM_CALIB = [
-    { a: 30, A: 793.4, B: 22.0 },
-    { a: 34, A: 773.5, B: 21.7 },
-    { a: 38, A: 760.8, B: 18.4 },
-    { a: 42, A: 745.0, B: 15.8 },
-  ];
-  const calibAt = (alphaDeg) => {
-    const cs = CAM_CALIB;
-    if (alphaDeg <= cs[0].a) return cs[0];
-    if (alphaDeg >= cs[cs.length - 1].a) return cs[cs.length - 1];
-    for (let i = 0; i < cs.length - 1; i++) {
-      if (alphaDeg >= cs[i].a && alphaDeg <= cs[i + 1].a) {
-        const u = (alphaDeg - cs[i].a) / (cs[i + 1].a - cs[i].a);
-        return { A: lerp(cs[i].A, cs[i + 1].A, u), B: lerp(cs[i].B, cs[i + 1].B, u) };
-      }
-    }
-    return cs[1];
-  };
-  // 反解 cy：A + B·cy = GROUND_FRAC·H  →  cy = (GROUND_FRAC·H − A)/B
-  const cyForGround = (alphaDeg) => {
-    const { A, B } = calibAt(alphaDeg);
-    return clamp((GROUND_FRAC * _H - A) / B, 0.2, 12);
-  };
-  const cyFollow = cyForGround(ALPHA_FOLLOW);
-  const cyWide = cyForGround(ALPHA_WIDE);
+  // —— 水平轨道边界 ——
+  // 跟随到队首/队尾时，若注视点=活跃柱，画面会有一半落在"无柱区"
+  // （实测：跟随到最后一根柱时右侧空半屏）。把注视点限制在
+  // [±(数据半宽 − 半窗×0.65)] 的轨道上：画面边缘最多伸入无柱区
+  // 0.35×半窗，队首/队尾的柱子自然停靠在画面 ~18% / ~74% 处，
+  // 中段跟随行为不变（clamp 不触发）。
+  const halfVisW = visW / 2;
+  const trackEdge = (span / 2) * S - halfVisW * 0.65;
+  const cxFollowFinal = clamp(cxFollow, -trackEdge, trackEdge);
 
-  // 俯仰：足够大才能看到地面线与柱体立面（避免裁底/悬空）。
+  // 垂直中心（注视点高度 cy）：让"柱体 + 地面线 + 标签"整体稳定入画。
+  // 【为什么用世界坐标比例而不是像素标定】
+  //   旧实现用一张绑定 FOV=50 / dist≈24.13 / 分辨率 900 的像素标定表
+  //   （CAM_CALIB）反解 cy；FOV 与距离一变（本次长焦化改参）整表失效，
+  //   柱体被裁得上下出画。改用**世界坐标比例**：与 FOV/distance 无关。
+  // 【跟随期注视点=贴地（cy≈-1.2，实测标定）】
+  //   经逐档实测（scripts/qa/diag-calib2.mjs，cy ∈ [-2,16] 步长 2）：
+  //   cy≈-1.2 时地面线稳定落在画面 ~85% 高度，柱体自地面向上生长、
+  //   完整入画不裁底——这正是柱状图的标准透视构图（地平线在下三分之一）。
+  //   注：跟随期升序弹出、早期柱矮，此构图下柱群自然位于画面中下部，
+  //   与 HUD 标题区形成上下分层，符合数据可视化阅读习惯。
+  // 【全景期】全阵（最高柱+标签）居中：cy = worldH × 0.62（实测地面线 ~64%，
+  //   柱阵顶部 ~37%，14 根柱 + 全部标签完整入画）。
+  const worldH = boxH / ZMAX;
+  const CY_GROUND = -1.2;   // 跟随期注视点：地面线下方一点（实测标定值）
+  const K_GAZE_WIDE = 0.62; // 全景期注视点系数
+  const cyFollow = CY_GROUND;
+  const cyWide = worldH * K_GAZE_WIDE;
+
+  // 俯仰：跟随期近平视（柱体立面完整、棱线竖直）；全景期略俯视（顶面进深感）。
   const alphaFollow = ALPHA_FOLLOW;
 
   let alpha, beta, distance, cx, cy;
   if (t <= reveal) {
     alpha = alphaFollow; beta = 4;
     distance = followDist;
-    cx = cxFollow;
+    cx = cxFollowFinal;
     cy = cyFollow;
   } else {
     const u = easeInOut(clamp((t - reveal) / (1 - reveal), 0, 1));
@@ -351,12 +394,14 @@ function computeFrame(tRaw) {
 // canvas 是在第一次 setOption（GL 系列初始化）时才插入 DOM 的。
 // 若此刻 attach 会因 getCanvas()===null 静默失败（曾导致监听完全没生效）。
 // 真正的挂载放在 ensureContextWatchers()，在每次成功 setOption 后调用。
+let sceneBuilt = false; // 当前 chart 实例是否已完成全量(notMerge)构建
 function initChart() {
   if (!el.value) return;
   if (chart) {
     try { chart.dispose(); } catch { /* 已失效实例，忽略 */ }
     chart = null;
   }
+  sceneBuilt = false; // 新实例必须重新全量构建
   chart = echarts.init(el.value, null, { renderer: 'canvas' });
   return chart;
 }
@@ -365,6 +410,23 @@ function initChart() {
 function ensureContextWatchers() {
   if (contextLostHandler && contextWatchedCanvas && contextWatchedCanvas.isConnected) return;
   attachContextWatchers();
+}
+
+// —— FOV 生效保障 ——
+// 【关键兼容性事实】echarts-gl@2 的 grid3D **不消费 viewControl.fov**（其源码中
+// 无任何读取 fov 的路径），clay 透视相机恒为默认 fov=50。长焦构图（本组件 FOV=16）
+// 必须在每次 setOption 后直写 GL 相机。实测直写后 merge 更新不会重置该值
+// （echarts-gl 不管理 fov，自然也不会覆盖），resize/交互仅更新位置与 aspect。
+function ensureGLFov() {
+  if (!chart) return;
+  try {
+    const g = chart.getModel().getComponent('grid3D');
+    const cam = g && g.coordinateSystem && g.coordinateSystem.viewGL && g.coordinateSystem.viewGL.camera;
+    if (cam && typeof cam.fov === 'number' && cam.fov !== FOV) {
+      cam.fov = FOV;
+      cam.update();
+    }
+  } catch { /* grid3D 尚未就绪（首个 setOption 前不可能是这种情况，防御即可） */ }
 }
 
 function buildOption(f) {
@@ -384,11 +446,13 @@ function buildOption(f) {
       value: b.value,
       itemStyle: { color: rgbStr(b.color), opacity: 1 },
     };
-    if (b.showLabel) {
-      // 常量字符串 formatter：echarts-gl 只认常量配置（函数式会被静默忽略，
-      // 且空文本会中断整个标签循环）——逐项开关 show 即可，安全且无重叠。
-      it.label = { show: true, formatter: b.labelText };
-    }
+    // merge 逐帧更新时，上一帧 item 的 label 不会自动清除，必须**每帧显式**
+    // 声明 show 与内容，否则"上一帧有标签、这一帧不该有"的柱子会残留旧标签。
+    // 常量字符串 formatter：echarts-gl 只认常量配置（函数式会被静默忽略，
+    // 且空文本会中断整个标签循环）——逐项开关 show 即可，安全且无重叠。
+    it.label = b.showLabel
+      ? { show: true, formatter: b.labelText }
+      : { show: false };
     return it;
   };
 
@@ -477,9 +541,20 @@ function applyFrame(t) {
   if (isContextLost.value) return f;
   if (!chart) return f;
   const opt = buildOption(f);
-  chart.setOption(opt, { notMerge: true });
+  // 【修复：播放期画布空白（"直到最后才显示所有柱子"）】
+  // 旧实现每帧 setOption(opt, { notMerge: true })——notMerge 会把上一次的
+  // echarts-gl 场景（grid3D + bar3D 网格 + GL 资源）整体销毁重建。实测单次
+  // 重建 9~90ms（低端 GPU / 软件渲染更甚），帧间隔 16ms 内下一次 setOption
+  // 又把场景清掉 → GL 层永远处于"已清空、未画完"状态 → 播放全程空白；
+  // 直到动画结束循环停止，最后一次重建才得以完成 → 用户只看到结尾全景。
+  // 修复：仅实例首次（或上下文恢复重建后）做全量 notMerge 构建；此后逐帧
+  // merge 增量更新（series data + viewControl），GL 网格原地更新。
+  chart.setOption(opt, { notMerge: !sceneBuilt });
+  sceneBuilt = true;
   // setOption 之后 ECharts 的 <canvas> 才真正存在 —— 此刻再确保监听已挂载。
   ensureContextWatchers();
+  // echarts-gl 不消费 viewControl.fov（见函数注释），setOption 后直写长焦 FOV。
+  ensureGLFov();
 
   // 惰性调试钩子：仅当 URL 含 debug=1（用于端到端验证脚本精确读取帧状态），
   // 生产/出片路径完全不触发，不写入任何全局状态。
@@ -493,6 +568,7 @@ function applyFrame(t) {
       bars: f.bars.map((b) => ({ x: +(b.value[0]).toFixed(2), z: +(b.value[2]).toFixed(3), ratio: +b.ratio.toFixed(3), shown: b.shown, rank: b.rank })),
       // 标签诊断：字体是否就绪 + 每个标签的实测像素宽（供 label_overflow 检测）
       labelFontReady: isLabelFontReady(),
+      applyCost: +lastApplyCost.toFixed(2),
       labelFont: LABEL_MEASURE_FONT,
       labels: f.bars.filter((b) => b.showLabel).map((b) => ({
         name: b.labelName ?? b.name,
@@ -500,6 +576,7 @@ function applyFrame(t) {
         text: b.labelText,
       })),
     };
+    window.__brChart = chart; // 供 QA 深挖 echarts 实例内部状态（仅 debug 路径）
   }
 
   const act = f.bars[f.activeIdx];
@@ -584,11 +661,26 @@ let lastRenderedT = 0; // 最近一次渲染的时间轴进度（用于上下文
 // 录制标记：为 true 时暂停 rAF 自动推进，改由外部逐帧 renderAt(t) 驱动，
 // 保证"导出内容"与"浏览器播放内容"逐帧一致（不受录制时机影响）。
 let recording = false;
+// 播放期渲染节流：GL 场景单帧更新在中低端 GPU / 软件渲染下可达数十毫秒，
+// 若每 rAF（60fps）都更新会持续积压、画面卡死甚至黑屏。这里把**渲染**上限
+// 限制在 PLAY_MAX_FPS；时间轴仍按真实时间推进（p 取自 now-t0），因此动画
+// 总时长不变，仅画面更新频率自适应降档。30fps 对柱状生长动画完全够流畅。
+const PLAY_MAX_FPS = 30;
+const PLAY_MIN_DT = 1000 / PLAY_MAX_FPS;
+let lastPlayRender = 0;
+// 最近一帧 setOption 实测耗时（ms），用于自适应判断是否需要降档诊断。
+let lastApplyCost = 0;
 function loop(now) {
   if (props.captureT != null || recording || isContextLost.value) return;
-  if (!t0) t0 = now;
+  if (!t0) { t0 = now; lastPlayRender = 0; }
   const p = Math.min((now - t0) / (Number(props.duration) || 7200), 1);
-  applyFrame(p);
+  // 节流：距上次渲染不足 PLAY_MIN_DT 时跳过本轮 GL 更新（时间照走）
+  if (now - lastPlayRender >= PLAY_MIN_DT || p >= 1) {
+    lastPlayRender = now;
+    const s = performance.now();
+    applyFrame(p);
+    lastApplyCost = performance.now() - s;
+  }
   if (p < 1) {
     rafId = requestAnimationFrame(loop);
   } else {

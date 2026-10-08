@@ -34,13 +34,14 @@ function pngToRaw(png) {
   return buf;
 }
 // 统计：背景底色附近的像素视为"空"；偏离则视为"内容"
+// xSkip：左右各忽略 N 像素（排除 HUD 四角装饰线对 bbox 的污染）
 function analyze(png, opts = {}) {
   const raw = pngToRaw(png);
-  const { bg = [6, 12, 24], tol = 46, topSkip = 0, bottomSkip = 0 } = opts;
+  const { bg = [6, 12, 24], tol = 46, topSkip = 0, bottomSkip = 0, xSkip = 0 } = opts;
   let minX = W, minY = H, maxX = -1, maxY = -1, cnt = 0, sumX = 0, sumY = 0;
   for (let y = 0; y < H; y++) {
     if (y < topSkip || y >= H - bottomSkip) continue;
-    for (let x = 0; x < W; x++) {
+    for (let x = xSkip; x < W - xSkip; x++) {
       const i = (y * W + x) * 3;
       const d = Math.abs(raw[i] - bg[0]) + Math.abs(raw[i + 1] - bg[1]) + Math.abs(raw[i + 2] - bg[2]);
       if (d > tol) {
@@ -129,15 +130,32 @@ async function main() {
       `${counts[0].cnt} → ${counts[counts.length - 1].cnt}`);
 
     // ── 3) 镜头跟随（内容质心 x 随 t 移动）──
-    const cxMove = Math.abs(counts[counts.length - 1].cx - counts[0].cx);
+    // 度量"跟随期内"质心的活动范围（跳过 t=0 空帧——空帧质心恒为画面中心，
+    // 且新构图的队首/队尾有轨道边界 clamp，两端帧质心都接近中心）。
+    const cxsFollow = counts.slice(1).map((c) => c.cx);
+    const cxMove = Math.max(...cxsFollow) - Math.min(...cxsFollow);
     check('镜头跟随·内容质心发生明显水平位移', cxMove > 80, `Δcx=${cxMove.toFixed(0)}px`);
 
     // ── 4) 结尾全景：外接框显著变宽且全部柱体入画 ──
     const midPng = await shoot(0.72, 'follow_end.png');
-    const aMid = analyze(midPng, { topSkip: 110 });
-    const aEnd = analyze(path.join(ART, 'pano_area.png'), { topSkip: 110 });
+    const aMid = analyze(midPng, { topSkip: 110, bottomSkip: 60, xSkip: 100 });
+    const aEnd = analyze(path.join(ART, 'pano_area.png'), { topSkip: 110, bottomSkip: 60, xSkip: 100 });
     check('结尾全景·外接框比跟随末帧更宽或相当', aEnd.w >= aMid.w * 0.9,
       `follow w=${(aMid.w * 100).toFixed(1)}% → pano w=${(aEnd.w * 100).toFixed(1)}%`);
+
+    // ── 4b) 跟随期构图回归（防"柱子出画/贴脸"复发）──
+    // 历史缺陷：广角近距构图下柱体上下出画、画面只剩 3-4 根贴脸巨柱。
+    // 硬指标：柱体底部不得越过 98% 屏高（裁底）；同框内容外接框宽 45%~98%
+    //（过窄=柱群太小，过宽=贴脸裁切）。xSkip/bottomSkip 排除 HUD 装饰。
+    if (aMid.bbox) {
+      const bottomFrac = aMid.bbox.maxY / H;
+      check('跟随构图·柱体底部完整入画（≤98% 屏高）', bottomFrac <= 0.98,
+        `bottom=${(bottomFrac * 100).toFixed(1)}%`);
+      check('跟随构图·同框内容外接框宽 45%~98%', aMid.w >= 0.45 && aMid.w <= 0.98,
+        `w=${(aMid.w * 100).toFixed(1)}%`);
+    } else {
+      check('跟随构图·跟随末帧存在柱体内容', false, 'bbox 为空');
+    }
 
     // ── 5) 确定性（同 t 两次渲染像素一致）──
     const d1 = await shoot(0.5, 'det_a.png');
@@ -149,6 +167,34 @@ async function main() {
     // 简化：统计"偏亮文字色像素"的 X 方向直方图连通段数量，对比柱子数；段数≈柱数说明标签分散。
     const labelStats = analyze(path.join(ART, 'pano_area.png'), { topSkip: 110 });
     check('标签·全景帧存在可辨识内容（非空白）', labelStats.cnt > 50000, `cnt=${labelStats.cnt}`);
+
+    // ── 6b) 标签覆盖数回归（v2.3.1：防"28 项数据全景期只有 4 个标签"复发）──
+    // 期望（1920 宽 / huining 数据集）：
+    //   n ≤ 16（elev=7、area=14）→ 全部贴标签；
+    //   n = 28（pop、red）→ 自适应步距 stride ≈ 2~3 → 全景 ≥ 10 个、跟随期 ≥ 9 个（窗口全显）。
+    const labelCoverage = await withPage(async (page) => {
+      const out = {};
+      for (const v of cfg.views) {
+        out[v.key] = {};
+        for (const t of [0.5, 1]) {
+          await page.goto(`${srv.base}${url(t, `&view=${v.key}&debug=1`)}`, { waitUntil: 'load' });
+          await page.waitForFunction(() => document.body.dataset.ready === '1', { timeout: 30000 });
+          out[v.key][t] = await page.evaluate(() => window.__brFrame ? window.__brFrame.labels.length : -1);
+        }
+      }
+      return out;
+    });
+    for (const v of cfg.views) {
+      const n = v.items.length;
+      const pano = labelCoverage[v.key][1];
+      const follow = labelCoverage[v.key][0.5];
+      if (n <= 16) {
+        check(`标签覆盖·${v.key}（n=${n}）全景全部贴标签`, pano === n, `labels=${pano}/${n}`);
+      } else {
+        check(`标签覆盖·${v.key}（n=${n}）全景 ≥10 个`, pano >= 10, `labels=${pano}/${n}`);
+        check(`标签覆盖·${v.key}（n=${n}）跟随期窗口全显 ≥9 个`, follow >= 9, `labels=${follow}`);
+      }
+    }
 
     // ── 7) 中文标签不逐字换行（label_overflow 检测）──
     // 结论性判据：用 canvas measureText 逐字宽度 vs 整串宽度——若发生"逐字换行"，
