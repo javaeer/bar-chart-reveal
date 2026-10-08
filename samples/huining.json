@@ -1,0 +1,430 @@
+{
+  "title": "会宁县乡镇数据 · 3D 对比",
+  "subtitle": "数据来源：会宁县人民政府官网乡镇概况 · 第七次全国人口普查 · 2025 会宁县统计公报",
+  "theme": "tech",
+  "revealRatio": 0.72,
+  "durationMs": 9000,
+  "views": [
+    {
+      "key": "area",
+      "label": "行政区域面积",
+      "short": "面积",
+      "unit": "km²",
+      "fixed": 0,
+      "items": [
+        {
+          "name": "会师镇",
+          "value": 204,
+          "highlight": true
+        },
+        {
+          "name": "郭城驿镇",
+          "value": 329,
+          "highlight": false
+        },
+        {
+          "name": "河畔镇",
+          "value": 243,
+          "highlight": false
+        },
+        {
+          "name": "头寨子镇",
+          "value": 474,
+          "highlight": false
+        },
+        {
+          "name": "太平店镇",
+          "value": 140,
+          "highlight": false
+        },
+        {
+          "name": "翟家所镇",
+          "value": 182,
+          "highlight": false
+        },
+        {
+          "name": "老君坡镇",
+          "value": 138,
+          "highlight": false
+        },
+        {
+          "name": "中川镇",
+          "value": 138,
+          "highlight": false
+        },
+        {
+          "name": "汉家岔镇",
+          "value": 388,
+          "highlight": false
+        },
+        {
+          "name": "新庄塬镇",
+          "value": 332,
+          "highlight": false
+        },
+        {
+          "name": "四房吴镇",
+          "value": 259,
+          "highlight": false
+        },
+        {
+          "name": "土门岘镇",
+          "value": 185,
+          "highlight": false
+        },
+        {
+          "name": "平头川镇",
+          "value": 138,
+          "highlight": false
+        },
+        {
+          "name": "新塬镇",
+          "value": 287,
+          "highlight": false
+        }
+      ]
+    },
+    {
+      "key": "pop",
+      "label": "常住人口",
+      "short": "人口",
+      "unit": "万人",
+      "fixed": 2,
+      "items": [
+        {
+          "name": "会师镇",
+          "value": 11.41,
+          "highlight": true
+        },
+        {
+          "name": "郭城驿镇",
+          "value": 2.8,
+          "highlight": false
+        },
+        {
+          "name": "河畔镇",
+          "value": 2.02,
+          "highlight": false
+        },
+        {
+          "name": "头寨子镇",
+          "value": 1.65,
+          "highlight": false
+        },
+        {
+          "name": "甘沟驿镇",
+          "value": 1.18,
+          "highlight": false
+        },
+        {
+          "name": "太平店镇",
+          "value": 1.17,
+          "highlight": false
+        },
+        {
+          "name": "翟家所镇",
+          "value": 1.02,
+          "highlight": false
+        },
+        {
+          "name": "老君坡镇",
+          "value": 1.15,
+          "highlight": false
+        },
+        {
+          "name": "中川镇",
+          "value": 0.94,
+          "highlight": false
+        },
+        {
+          "name": "汉家岔镇",
+          "value": 0.98,
+          "highlight": false
+        },
+        {
+          "name": "新庄塬镇",
+          "value": 0.54,
+          "highlight": false
+        },
+        {
+          "name": "四房吴镇",
+          "value": 0.86,
+          "highlight": false
+        },
+        {
+          "name": "土门岘镇",
+          "value": 0.43,
+          "highlight": false
+        },
+        {
+          "name": "平头川镇",
+          "value": 0.65,
+          "highlight": false
+        },
+        {
+          "name": "新塬镇",
+          "value": 0.72,
+          "highlight": false
+        },
+        {
+          "name": "侯家川镇",
+          "value": 0.68,
+          "highlight": false
+        },
+        {
+          "name": "柴家门镇",
+          "value": 2.09,
+          "highlight": false
+        },
+        {
+          "name": "刘家寨子镇",
+          "value": 0.86,
+          "highlight": false
+        },
+        {
+          "name": "白草塬镇",
+          "value": 1.36,
+          "highlight": false
+        },
+        {
+          "name": "大沟镇",
+          "value": 1.03,
+          "highlight": false
+        },
+        {
+          "name": "丁家沟镇",
+          "value": 1.05,
+          "highlight": false
+        },
+        {
+          "name": "杨崖集镇",
+          "value": 1.09,
+          "highlight": false
+        },
+        {
+          "name": "韩家集镇",
+          "value": 0.7,
+          "highlight": false
+        },
+        {
+          "name": "土高山乡",
+          "value": 0.41,
+          "highlight": false
+        },
+        {
+          "name": "新添堡回族乡",
+          "value": 0.86,
+          "highlight": false
+        },
+        {
+          "name": "党家岘乡",
+          "value": 1.03,
+          "highlight": false
+        },
+        {
+          "name": "八里湾乡",
+          "value": 0.82,
+          "highlight": false
+        },
+        {
+          "name": "草滩镇",
+          "value": 0.65,
+          "highlight": false
+        }
+      ]
+    },
+    {
+      "key": "elev",
+      "label": "平均海拔",
+      "short": "海拔",
+      "unit": "m",
+      "fixed": 0,
+      "items": [
+        {
+          "name": "会师镇",
+          "value": 1950,
+          "highlight": true
+        },
+        {
+          "name": "河畔镇",
+          "value": 1500,
+          "highlight": false
+        },
+        {
+          "name": "头寨子镇",
+          "value": 1700,
+          "highlight": false
+        },
+        {
+          "name": "太平店镇",
+          "value": 1865,
+          "highlight": false
+        },
+        {
+          "name": "老君坡镇",
+          "value": 2073,
+          "highlight": false
+        },
+        {
+          "name": "新庄塬镇",
+          "value": 2000,
+          "highlight": false
+        },
+        {
+          "name": "四房吴镇",
+          "value": 1900,
+          "highlight": false
+        }
+      ]
+    },
+    {
+      "key": "red",
+      "label": "红色资源指数",
+      "short": "红色",
+      "unit": "",
+      "fixed": 0,
+      "items": [
+        {
+          "name": "会师镇",
+          "value": 100,
+          "highlight": true
+        },
+        {
+          "name": "郭城驿镇",
+          "value": 34,
+          "highlight": false
+        },
+        {
+          "name": "河畔镇",
+          "value": 42,
+          "highlight": false
+        },
+        {
+          "name": "头寨子镇",
+          "value": 22,
+          "highlight": false
+        },
+        {
+          "name": "甘沟驿镇",
+          "value": 16,
+          "highlight": false
+        },
+        {
+          "name": "太平店镇",
+          "value": 20,
+          "highlight": false
+        },
+        {
+          "name": "翟家所镇",
+          "value": 36,
+          "highlight": false
+        },
+        {
+          "name": "老君坡镇",
+          "value": 14,
+          "highlight": false
+        },
+        {
+          "name": "中川镇",
+          "value": 30,
+          "highlight": false
+        },
+        {
+          "name": "汉家岔镇",
+          "value": 12,
+          "highlight": false
+        },
+        {
+          "name": "新庄塬镇",
+          "value": 10,
+          "highlight": false
+        },
+        {
+          "name": "四房吴镇",
+          "value": 12,
+          "highlight": false
+        },
+        {
+          "name": "土门岘镇",
+          "value": 10,
+          "highlight": false
+        },
+        {
+          "name": "平头川镇",
+          "value": 8,
+          "highlight": false
+        },
+        {
+          "name": "新塬镇",
+          "value": 8,
+          "highlight": false
+        },
+        {
+          "name": "侯家川镇",
+          "value": 9,
+          "highlight": false
+        },
+        {
+          "name": "柴家门镇",
+          "value": 18,
+          "highlight": false
+        },
+        {
+          "name": "刘家寨子镇",
+          "value": 8,
+          "highlight": false
+        },
+        {
+          "name": "白草塬镇",
+          "value": 7,
+          "highlight": false
+        },
+        {
+          "name": "大沟镇",
+          "value": 8,
+          "highlight": false
+        },
+        {
+          "name": "丁家沟镇",
+          "value": 7,
+          "highlight": false
+        },
+        {
+          "name": "杨崖集镇",
+          "value": 7,
+          "highlight": false
+        },
+        {
+          "name": "韩家集镇",
+          "value": 6,
+          "highlight": false
+        },
+        {
+          "name": "土高山乡",
+          "value": 6,
+          "highlight": false
+        },
+        {
+          "name": "新添堡回族乡",
+          "value": 6,
+          "highlight": false
+        },
+        {
+          "name": "党家岘乡",
+          "value": 7,
+          "highlight": false
+        },
+        {
+          "name": "八里湾乡",
+          "value": 6,
+          "highlight": false
+        },
+        {
+          "name": "草滩镇",
+          "value": 5,
+          "highlight": false
+        }
+      ]
+    }
+  ]
+}

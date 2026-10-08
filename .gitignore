@@ -1,0 +1,9 @@
+node_modules/
+dist/
+frames/
+*.mp4
+*.webm
+poster_*.png
+*.log
+.DS_Store
+out/*.log
