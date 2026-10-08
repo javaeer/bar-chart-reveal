@@ -27,12 +27,24 @@ export function pickEncoder() {
   try {
     out = execFileSync('ffmpeg', ['-hide_banner', '-encoders'], { encoding: 'utf8' });
   } catch {
-    throw new Error('未找到 ffmpeg，请先安装 ffmpeg');
+    throw new Error(
+      '未找到 ffmpeg。请安装 ffmpeg 并确保其在 PATH 中。\n' +
+      '  安装指引：\n' +
+      '    · Debian/Ubuntu : sudo apt-get update && sudo apt-get install -y ffmpeg\n' +
+      '    · macOS (brew)  : brew install ffmpeg\n' +
+      '    · Windows(winget): winget install Gyan.FFmpeg\n' +
+      '  安装后可用 `ffmpeg -version` 验证；如为自定义路径，请把其所在目录加入 PATH。'
+    );
   }
   if (out.includes('libx264')) return { name: 'libx264', args: ['-pix_fmt', 'yuv420p', '-crf', '18'], ext: 'mp4' };
   if (out.includes('libopenh264')) return { name: 'libopenh264', args: ['-b:v', '8000k', '-pix_fmt', 'yuv420p'], ext: 'mp4' };
   if (out.includes('libvpx-vp9')) return { name: 'libvpx-vp9', args: ['-b:v', '0', '-crf', '32', '-row-mt', '1', '-pix_fmt', 'yuv420p'], ext: 'webm' };
-  throw new Error('无可用的视频编码器（需 libx264 / libopenh264 / libvpx-vp9）');
+  throw new Error(
+    'ffmpeg 已安装，但无可用的视频编码器（需 libx264 / libopenh264 / libvpx-vp9 之一）。\n' +
+    '  常见原因：安装了精简版 ffmpeg（如 ffmpeg-static 或部分发行版的最小包）。\n' +
+    '  解决：安装带 x264 的完整版 ffmpeg（Debian/Ubuntu: sudo apt-get install -y ffmpeg；\n' +
+    '        macOS: brew install ffmpeg）。可用 `ffmpeg -encoders | grep -E "libx264|libvpx-vp9"` 自查。'
+  );
 }
 
 // ───────────────────────────────────────────────────────────
@@ -51,7 +63,15 @@ export function resolveChromium() {
   for (const name of ['chromium', 'chromium-browser', 'google-chrome']) {
     try { return execFileSync('which', [name], { encoding: 'utf8' }).trim(); } catch { /* next */ }
   }
-  throw new Error('未找到 chromium，请安装或设置 CHROMIUM_PATH 环境变量');
+  throw new Error(
+    '未找到 chromium。请安装 Chromium 或设置 CHROMIUM_PATH 环境变量指向浏览器可执行文件。\n' +
+    '  安装指引：\n' +
+    '    · Debian/Ubuntu : sudo apt-get update && sudo apt-get install -y chromium chromium-common\n' +
+    '                       （或 google-chrome-stable）\n' +
+    '    · macOS         : brew install --cask chromium  （或安装 Google Chrome）\n' +
+    '  自定义路径：export CHROMIUM_PATH=/path/to/chrome   （亦兼容 CHROME_PATH）\n' +
+    '  出片另需 Xvfb（无显示器环境）：sudo apt-get install -y xvfb'
+  );
 }
 
 // ───────────────────────────────────────────────────────────

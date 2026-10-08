@@ -15,6 +15,18 @@ const DEFAULTS = {
   durationMs: 7200,
 };
 
+// item.name 最大字符数：超出则截断为「前 N 字 + …」。
+// 原因：无头环境 / 3D 柱体标签宽度有限，超长名称会把标签挤成竖排或互相重叠。
+const NAME_MAX = 12;
+
+// 按「码点」截断（避免把 emoji / 代理对劈成半个字符产生乱码）。
+export function truncateName(name, max = NAME_MAX) {
+  const s = typeof name === 'string' ? name.trim() : '';
+  const chars = Array.from(s); // 码点数组，正确处理 emoji / 生僻字
+  if (chars.length <= max) return s;
+  return chars.slice(0, max).join('') + '…';
+}
+
 // ───────────────────────────────────────────────────────────
 // 2.2 normalizeConfig(raw)
 //   补齐默认值、过滤非法项、保证每个 view 至少 1 条 items。
@@ -103,26 +115,40 @@ export function normalizeConfig(raw) {
     const itemsRaw = Array.isArray(v.items) ? v.items : [];
     const seen = new Set();
     itemsRaw.forEach((it, ii) => {
+      // ① 必须是普通对象（排除 null / 数组 / 原始值）
       if (!it || typeof it !== 'object' || Array.isArray(it)) {
         warns.push(`views[${vi}].items[${ii}] 不是对象，已跳过`);
         return;
       }
+      // ② name 必须是非空字符串
       const name = typeof it.name === 'string' ? it.name.trim() : '';
       if (!name) {
         warns.push(`views[${vi}].items[${ii}] 缺少有效 name，已跳过`);
         return;
       }
-      const value = Number(it.value);
-      if (!Number.isFinite(value) || value < 0) {
-        warns.push(`views[${vi}].items[${ii}](${name}) value 非法/为负，已跳过`);
-        return;
+      // ③ value 必须可转为有限数，否则归零（而非整条丢弃，保留条目便于定位脏数据）
+      let value = Number(it.value);
+      if (!Number.isFinite(value)) {
+        warns.push(`views[${vi}].items[${ii}](${name}) value 非法(${it.value})，已归零`);
+        value = 0;
       }
+      // ④ 负数取绝对值（数值类指标无负向语义，负值多为录入错误）
+      if (value < 0) {
+        warns.push(`views[${vi}].items[${ii}](${name}) value 为负数(${value})，已取绝对值`);
+        value = Math.abs(value);
+      }
+      // ⑤ 名称去重（同名柱体在标签/排名上会歧义）
       if (seen.has(name)) {
         warns.push(`views[${vi}].items 名称重复(${name})，已跳过`);
         return;
       }
       seen.add(name);
-      view.items.push({ name, value, highlight: it.highlight === true });
+      // ⑥ 超长名称截断（防标签竖排/重叠），去重仍按原始 name 判断
+      const display = truncateName(name, NAME_MAX);
+      if (display !== name) {
+        warns.push(`views[${vi}].items[${ii}](${name}) 名称过长，已截断为「${display}」`);
+      }
+      view.items.push({ name: display, value, highlight: it.highlight === true });
     });
 
     // 保证每个 view 至少 1 条 items

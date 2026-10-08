@@ -5,6 +5,44 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
   <title>3D 柱状赛跑 · 配置驱动可视化（Vue3 + ECharts-GL）</title>
+
+  <!--
+    中文字体显式声明。
+    原因：ECharts 3D 标签依赖 canvas measureText 计算换行；若中文字体尚未就绪，
+    测量会退化，把每个汉字当成超宽字符 → 标签"逐字换行/竖排"。
+    做法：用 @font-face 显式声明字体族并使用 font-display:swap。
+      · src 优先用 local() 匹配**系统已安装**的中文字体（Linux 常见 Noto Sans CJK SC，
+        macOS PingFang SC，Windows Microsoft YaHei），命中即无需网络下载；
+      · 末位才回退到打包字体 URL —— 注意：仓库默认**不内置**字体文件，
+        若未放置 /fonts/*，该 URL 分支仅在 local() 全部未命中时才会被请求。
+      · 这里刻意不使用 <link rel="preload"> 指向字体文件：在未内置字体时会产生 404，
+        反而污染控制台。font-display:swap 已足够保证首屏不被字体阻塞。
+  -->
+  <style>
+    @font-face {
+      font-family: 'Noto Sans CJK SC';
+      font-style: normal;
+      font-weight: 400 700;
+      font-display: swap;
+      src: local('Noto Sans CJK SC'),
+           local('Noto Sans CJK SC Regular'),
+           local('NotoSansCJKsc-Regular'),
+           local('Source Han Sans SC'),
+           local('PingFang SC'),
+           local('Microsoft YaHei');
+    }
+    @font-face {
+      font-family: 'Noto Sans CJK SC';
+      font-style: normal;
+      font-weight: 700;
+      font-display: swap;
+      src: local('Noto Sans CJK SC Bold'),
+           local('NotoSansCJKsc-Bold'),
+           local('Source Han Sans SC Bold'),
+           local('PingFang SC Semibold'),
+           local('Microsoft YaHei Bold');
+    }
+  </style>
 </head>
 <body>
   <div id="app"></div>

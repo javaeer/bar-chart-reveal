@@ -1,6 +1,6 @@
 {
   "name": "bar-chart-reveal",
-  "version": "2.0.0",
+  "version": "2.2.0",
   "description": "配置驱动的 3D 柱状赛跑可视化与出片工具（Vue3 + ECharts-GL，任意数据集/主题/标题）",
   "type": "module",
   "scripts": {
@@ -11,7 +11,9 @@
     "preview": "vite preview --port 4173",
     "data": "node scripts/data/fetch-huining.mjs",
     "capture": "node scripts/capture.mjs",
-    "render": "node scripts/render.mjs"
+    "render": "node scripts/render.mjs",
+    "test": "node scripts/qa/config.test.mjs",
+    "qa": "node scripts/qa/verify.mjs && node scripts/qa/interact.mjs"
   },
   "dependencies": {
     "echarts": "^5.5.1",

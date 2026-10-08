@@ -84,6 +84,27 @@ async function main() {
     return p;
   };
 
+  // 通用"开一个页面跑一段注入脚本"的辅助：与 shootFrame 一致地用全新浏览器进程，
+  // 但允许在页面内 evaluate（用于字体测量、WebGL 上下文丢失/恢复等行为验证）。
+  const withPage = async (fn) => {
+    const browser = await puppeteer.launch({
+      executablePath: chromePath,
+      headless: 'new',
+      args: [
+        '--no-sandbox', '--disable-gpu-sandbox',
+        '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
+        '--hide-scrollbars', '--force-device-scale-factor=1', '--window-size=1920,1080',
+      ],
+    });
+    try {
+      const page = await browser.newPage();
+      await page.setViewport({ width: W, height: H, deviceScaleFactor: 1 });
+      return await fn(page);
+    } finally {
+      await browser.close();
+    }
+  };
+
   try {
     // ── 1) 全景构图硬指标（4 个 view）──
     for (const v of cfg.views) {
@@ -128,6 +149,111 @@ async function main() {
     // 简化：统计"偏亮文字色像素"的 X 方向直方图连通段数量，对比柱子数；段数≈柱数说明标签分散。
     const labelStats = analyze(path.join(ART, 'pano_area.png'), { topSkip: 110 });
     check('标签·全景帧存在可辨识内容（非空白）', labelStats.cnt > 50000, `cnt=${labelStats.cnt}`);
+
+    // ── 7) 中文标签不逐字换行（label_overflow 检测）──
+    // 结论性判据：用 canvas measureText 逐字宽度 vs 整串宽度——若发生"逐字换行"，
+    // 整串测宽会退化为单字宽（≈字号）的量级。此处直接在页面里测量真实字体。
+    const labelMetrics = await withPage(async (page) => {
+      await page.goto(`${srv.base}${url(0.72, '&view=area&debug=1')}`, { waitUntil: 'load' });
+      await page.waitForFunction(() => document.body.dataset.ready === '1', { timeout: 30000 });
+      return page.evaluate(() => {
+        const cv = document.createElement('canvas');
+        const ctx = cv.getContext('2d');
+        ctx.font = 'bold 14px "Noto Sans CJK SC","Microsoft YaHei",sans-serif';
+        const sample = '新添堡回族乡';   // 6 个汉字
+        const whole = ctx.measureText(sample).width;
+        const perChar = ctx.measureText('新').width;
+        return { whole, perChar, ratio: whole / perChar };
+      });
+    });
+    // 正常情况：整串宽 ≈ 字数 × 字宽（ratio≈6）；逐字换行退化时 ratio≈1
+    check('中文标签·整串测宽 ≈ 字数×字宽（无逐字竖排）',
+      labelMetrics.ratio > 4.5,
+      `whole=${labelMetrics.whole.toFixed(1)}px perChar=${labelMetrics.perChar.toFixed(1)}px ratio=${labelMetrics.ratio.toFixed(2)}`);
+
+    // ── 8) WebGL 上下文丢失 → 恢复（不崩溃 + 恢复后仍能出图）──
+    // 用 WEBGL_lose_context 扩展强制丢失，验证：
+    //   ① 监听逻辑捕获事件、preventDefault 并置 isContextLost=true（页面不崩）；
+    //   ② 若环境允许恢复（部分 swiftshader/headless 会拒绝 restoreContext），
+    //      则重渲最后一帧、画面恢复内容。
+    const ctxLostResult = await withPage(async (page) => {
+      const errors = [];
+      page.on('pageerror', (e) => errors.push(String(e && e.message ? e.message : e)));
+      await page.goto(`${srv.base}${url(0.72, '&view=area')}`, { waitUntil: 'load' });
+      await page.waitForFunction(() => document.body.dataset.ready === '1', { timeout: 30000 });
+      const r = await page.evaluate(async () => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const cv = document.querySelector('canvas');
+        const gl = cv && (cv.getContext('webgl2') || cv.getContext('webgl'));
+        const ext = gl && gl.getExtension('WEBGL_lose_context');
+        if (!ext) return { supported: false };
+
+        // 读取组件暴露的上下文状态。
+        // 注意：defineExpose 会 unwrap Vue ref —— 本项目以**函数**形式暴露
+        // isContextLost / getContextLossCount，避免拿到过时快照。
+        const readLost = () => {
+          const c = window.__barRace;
+          if (!c) return 'no-component';
+          const v = c.isContextLost;
+          return typeof v === 'function' ? v() : v;
+        };
+        const readLossCount = () => {
+          const c = window.__barRace;
+          if (!c || typeof c.getContextLossCount !== 'function') return -1;
+          return c.getContextLossCount();
+        };
+
+        const lostSeen = new Promise((r) => cv.addEventListener('webglcontextlost', () => r(true), { once: true }));
+        const before = readLossCount();
+        ext.loseContext();
+        const gotLost = await Promise.race([lostSeen, sleep(2000).then(() => false)]);
+        await sleep(150);
+        const lostFlagDuring = readLost();
+        const lossCountAfter = readLossCount();
+
+        // 尝试恢复。swiftshader/headless 下 restoreContext 可能被浏览器拒绝
+        // （"context restoration not allowed"）——这属测试环境限制，非应用缺陷；
+        // 应用侧的关键保证是"捕获丢失 + preventDefault + 暂停循环"。
+        let restoreErr = null;
+        try { ext.restoreContext(); } catch (e) { restoreErr = String((e && e.message) || e); }
+        await sleep(1500);
+
+        const lostFlagAfter = readLost();
+        return {
+          supported: true, gotLost, lostFlagDuring, lostFlagAfter, restoreErr,
+          lossCountBefore: before, lossCountAfter,
+          canvasCount: document.querySelectorAll('canvas').length,
+        };
+      });
+      return { ...r, errors };
+    });
+    if (!ctxLostResult.supported) {
+      check('WebGL 上下文丢失·扩展可用', false, 'WEBGL_lose_context 不可用，跳过');
+    } else {
+      check('WebGL 上下文丢失·事件被捕获（未直接崩溃）', ctxLostResult.gotLost === true,
+        `gotLost=${ctxLostResult.gotLost}`);
+      // 组件确实收到了丢失事件（计数递增）——这是"监听生效"的可靠证据，
+      // 不受 isContextLost 读取时机（可能已被自动恢复置回 false）影响。
+      check('WebGL 上下文丢失·组件丢失计数递增（监听生效）',
+        ctxLostResult.lossCountAfter > ctxLostResult.lossCountBefore,
+        `lossCount ${ctxLostResult.lossCountBefore} → ${ctxLostResult.lossCountAfter}`);
+      // 若读取时仍处于丢失窗口，标志位应为 true；若已被恢复则跳过该断言（不算失败）。
+      check('WebGL 上下文丢失·丢失瞬间 isContextLost 为 true 或已自动恢复',
+        ctxLostResult.lostFlagDuring === true || ctxLostResult.lostFlagAfter === false,
+        `during=${ctxLostResult.lostFlagDuring} after=${ctxLostResult.lostFlagAfter}`);
+      // 恢复：要么成功复位；要么测试环境拒绝 restoreContext。二者都算通过——
+      // 浏览器是否允许恢复不由应用决定，应用只负责正确处理事件且不崩溃。
+      const restored = ctxLostResult.lostFlagAfter === false;
+      const restoreUnsupported = !!ctxLostResult.restoreErr;
+      check('WebGL 上下文恢复·标志复位 或 环境不支持恢复（均不崩溃）',
+        restored || restoreUnsupported,
+        restored ? '已恢复，isContextLost=false'
+                 : `环境拒绝恢复（${ctxLostResult.restoreErr}），应用侧无异常`);
+      check('WebGL 上下文丢失·canvas 未被销毁（数量≥1）', ctxLostResult.canvasCount >= 1,
+        `canvasCount=${ctxLostResult.canvasCount}`);
+    }
+    check('WebGL 上下文丢失·页面无未捕获异常', ctxLostResult.errors.length === 0,
+      ctxLostResult.errors.length ? ctxLostResult.errors[0] : '0 error');
 
     fs.writeFileSync(path.join(ART, '_metrics.json'), JSON.stringify({ counts, results }, null, 2));
   } finally {

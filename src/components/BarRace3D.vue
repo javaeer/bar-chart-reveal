@@ -26,6 +26,20 @@ const emit = defineEmits(['active', 'done']);
 const el = ref(null);
 let chart = null;
 
+// —— WebGL 上下文丢失保护 ——
+// 无头 Chromium 逐帧截图或长时间预览时，GPU 资源可能耗尽导致 'webglcontextlost'。
+// 若不拦截，默认行为会让上下文**不可逆**销毁 → 画面永久黑屏/空白。
+// 这里：丢失时 preventDefault + 暂停循环；恢复时重建 ECharts 实例并重放待渲染帧。
+const isContextLost = ref(false);
+// 丢失 / 恢复发生次数（单调递增）。用于测试与运维观测：
+// 即便上下文在极短时间内"丢失→恢复"，计数也能证明确实发生过，不受读取时机影响。
+const contextLossCount = ref(0);
+const contextRestoreCount = ref(0);
+let pendingFrameT = null;       // 丢失期间最后一次请求渲染的进度，恢复后补渲
+let contextLostHandler = null;
+let contextRestoredHandler = null;
+let contextWatchedCanvas = null; // 当前已挂载监听的 canvas（用于复用判断 / 解绑）
+
 // ================= 时间轴几何（场景单位） =================
 // 所有场景尺寸以 S（单个 X 步距的场景长度）为基准，相机距离与 box 同比例缩放，
 // 因此一组调好的构图参数对任意 items 数量都成立。
@@ -58,11 +72,45 @@ const H_FLOOR = 0.30;
 // 标签密度：n 较大时只给"名次靠前 + 高亮 + 活跃"贴标签，避免 28 项糊成一片
 const LABEL_MAX_ALL = 12;
 
+// —— 标签字体（单一真源）——
+// 中文字体必须显式声明：无头环境下 font-family 若解析到不含中文字形的字体，
+// canvas measureText 会把每个汉字当作超宽字符 → 标签"逐字换行/竖排"。
+// 与 index.html 的 @font-face 保持同一字体栈。
+const LABEL_FONT_FAMILY = '"Noto Sans CJK SC","PingFang SC","Microsoft YaHei",sans-serif';
+const LABEL_FONT_SIZE = 16;
+// 显式用于 canvas 测量的字体串（任务二要求：测量标签宽度前显式设置 ctx.font）
+const LABEL_MEASURE_FONT = `bold ${LABEL_FONT_SIZE}px ${LABEL_FONT_FAMILY}`;
+
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const lerp = (a, b, t) => a + (b - a) * t;
 const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 // 轻微回弹，让柱子"弹"出来（f(0)=0，峰值 ~1.1）
 const easeOutBack = (t) => 1 + 2.7 * Math.pow(t - 1, 3) + 1.7 * Math.pow(t - 1, 2);
+
+// ================= 标签测量守卫（任务二）=================
+// 用一个独立的离屏 canvas 做文本测量，**每次测量前显式设置 ctx.font**——
+// 这是修复"中文标签逐字换行"的关键：若沿用被污染/未初始化的 ctx.font，
+// measureText 会退化成"每字≈一个字宽"的异常值，进而触发逐字换行。
+let measureCtx = null;
+function getMeasureCtx() {
+  if (measureCtx) return measureCtx;
+  if (typeof document === 'undefined') return null;
+  const cv = document.createElement('canvas');
+  measureCtx = cv.getContext('2d');
+  return measureCtx;
+}
+// 返回文本像素宽度；ctx 不可用时返回 0（调用方走降级路径）
+function measureTextWidth(text, font = LABEL_MEASURE_FONT) {
+  const ctx = getMeasureCtx();
+  if (!ctx) return 0;
+  ctx.font = font; // 关键：显式设置，杜绝字号/字体串污染
+  return ctx.measureText(String(text)).width;
+}
+// 字体是否已就绪（含中文字形）。未就绪时测量结果不可信，用于 QA / 调试断言。
+function isLabelFontReady() {
+  if (typeof document === 'undefined' || !document.fonts) return true;
+  try { return document.fonts.check(LABEL_MEASURE_FONT, '中'); } catch { return true; }
+}
 
 // ================= 纯函数：t → 画面状态 =================
 // 浏览器动画与逐帧截帧共用，保证逐帧一致；无副作用、不依赖外部可变状态。
@@ -167,6 +215,9 @@ function computeFrame(tRaw) {
 
   // —— 标签选取（常量逐项 label，规避函数式配置被忽略的问题）——
   // n ≤ 12 全部显示；n > 12 只给"名次靠前 + 高亮 + 当前活跃 + 已出现"的贴标签，避免糊字。
+  // 额外：用显式字体的 measureText 估算标签宽度，过宽的名称进一步收窄，
+  // 从源头避免"标签比柱子还宽 → 挤压换行"（任务二 label_overflow 防护）。
+  const maxLabelW = Math.max(120, el.value ? el.value.clientWidth * 0.22 : 300);
   const labelTopN = n <= 18 ? 8 : Math.max(4, Math.round(16 / Math.sqrt(n)));
   bars.forEach((b, i) => {
     b.showLabel = b.shown && (
@@ -176,7 +227,19 @@ function computeFrame(tRaw) {
       i === activeIdx
     );
     if (b.showLabel) {
-      b.labelText = `${b.name}\n${b.real.toFixed(Number(props.fixed) || 0)}${props.unit || ''}`;
+      const valueText = b.real.toFixed(Number(props.fixed) || 0) + (props.unit || '');
+      // 测量前显式设置 ctx.font（见 measureTextWidth）；超宽则按比例收缩名称
+      let nm = b.name;
+      const wName = measureTextWidth(nm);
+      if (wName > maxLabelW) {
+        // 名称独占宽度超限时，逐字回缩并补省略号，保证「名称+数值」总宽可控
+        const chars = Array.from(nm);
+        let cut = chars.length;
+        while (cut > 1 && measureTextWidth(chars.slice(0, cut).join('') + '…') > maxLabelW) cut--;
+        nm = chars.slice(0, cut).join('') + '…';
+      }
+      b.labelName = nm;
+      b.labelText = `${nm}\n${valueText}`;
     }
   });
 
@@ -281,6 +344,29 @@ function computeFrame(tRaw) {
 }
 
 // ================= 渲染 =================
+// 初始化 / 重建 ECharts 实例（WebGL 上下文恢复后需整体重建，无法原地复活 GL 资源）。
+// 调用前会 dispose 旧实例，避免同一容器上堆积多个 GL 上下文。
+//
+// 注意：此处**不**立刻挂载上下文监听——echarts.init() 返回时其 <canvas> 尚未创建，
+// canvas 是在第一次 setOption（GL 系列初始化）时才插入 DOM 的。
+// 若此刻 attach 会因 getCanvas()===null 静默失败（曾导致监听完全没生效）。
+// 真正的挂载放在 ensureContextWatchers()，在每次成功 setOption 后调用。
+function initChart() {
+  if (!el.value) return;
+  if (chart) {
+    try { chart.dispose(); } catch { /* 已失效实例，忽略 */ }
+    chart = null;
+  }
+  chart = echarts.init(el.value, null, { renderer: 'canvas' });
+  return chart;
+}
+
+// 确保上下文监听已挂载。canvas 可能尚未就绪（初次 init 后），故允许重试。
+function ensureContextWatchers() {
+  if (contextLostHandler && contextWatchedCanvas && contextWatchedCanvas.isConnected) return;
+  attachContextWatchers();
+}
+
 function buildOption(f) {
   const th = f.theme;
   const axes = {
@@ -333,10 +419,11 @@ function buildOption(f) {
       distance: 0.6,
       textStyle: {
         color: th.labelColor,
-        fontSize: 16,
+        fontSize: LABEL_FONT_SIZE,
         fontWeight: 700,
         lineHeight: 20,
-        fontFamily: '"PingFang SC","Microsoft YaHei",sans-serif',
+        // 与 index.html @font-face / LABEL_MEASURE_FONT 同一字体栈，保证测量与实际渲染一致
+        fontFamily: LABEL_FONT_FAMILY,
         textBorderColor: th.labelBg,
         textBorderWidth: 3,
         backgroundColor: th.labelBg,
@@ -384,9 +471,15 @@ function buildOption(f) {
 
 function applyFrame(t) {
   const f = computeFrame(t);
+  lastRenderedT = t; // 供上下文丢失时记录待恢复帧
+  // 上下文已丢失时不写 GL 资源（setOption 仍会触发 GL 调用，可能抛错）；
+  // 恢复流程会用 pendingFrameT 补渲这一帧。
+  if (isContextLost.value) return f;
   if (!chart) return f;
   const opt = buildOption(f);
   chart.setOption(opt, { notMerge: true });
+  // setOption 之后 ECharts 的 <canvas> 才真正存在 —— 此刻再确保监听已挂载。
+  ensureContextWatchers();
 
   // 惰性调试钩子：仅当 URL 含 debug=1（用于端到端验证脚本精确读取帧状态），
   // 生产/出片路径完全不触发，不写入任何全局状态。
@@ -398,6 +491,14 @@ function applyFrame(t) {
       activeIdx: f.activeIdx,
       camera: { alpha: f.camera.alpha, beta: f.camera.beta, distance: +f.camera.distance.toFixed(2), center: f.camera.center.map((v) => +v.toFixed(2)) },
       bars: f.bars.map((b) => ({ x: +(b.value[0]).toFixed(2), z: +(b.value[2]).toFixed(3), ratio: +b.ratio.toFixed(3), shown: b.shown, rank: b.rank })),
+      // 标签诊断：字体是否就绪 + 每个标签的实测像素宽（供 label_overflow 检测）
+      labelFontReady: isLabelFontReady(),
+      labelFont: LABEL_MEASURE_FONT,
+      labels: f.bars.filter((b) => b.showLabel).map((b) => ({
+        name: b.labelName ?? b.name,
+        w: +measureTextWidth(b.labelName ?? b.name).toFixed(1),
+        text: b.labelText,
+      })),
     };
   }
 
@@ -414,6 +515,62 @@ function applyFrame(t) {
   return f;
 }
 
+// ================= WebGL 上下文丢失 / 恢复监听 =================
+// 监听目标是**真正承载 GL 的 <canvas>**（echarts 容器 div 上不冒泡该事件）。
+// 注意 getCanvas() 依赖 chart 已存在，故仅在重建后调用。
+function attachContextWatchers() {
+  detachContextWatchers();
+  const canvas = getCanvas();
+  if (!canvas) return; // canvas 尚未创建：调用方（ensureContextWatchers）会在下次渲染后重试
+
+  contextLostHandler = (event) => {
+    // 关键：阻止默认行为，浏览器才会在资源可用后派发 webglcontextrestored。
+    // 若省略，上下文将被永久销毁，后续无法恢复。
+    if (event && typeof event.preventDefault === 'function') event.preventDefault();
+    console.warn('[BarRace3D] WebGL context lost, pausing render loop');
+    isContextLost.value = true;
+    contextLossCount.value++;
+    // 记录当前进度：实时播放取暂停时刻；截帧/录制模式取最近一次 renderAt/pendingFrameT
+    if (pendingFrameT == null) pendingFrameT = lastRenderedT;
+    // 停止动画帧循环，避免在无上下文状态下空转
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = null;
+  };
+
+  contextRestoredHandler = () => {
+    console.info('[BarRace3D] WebGL context restored, re-initializing chart');
+    isContextLost.value = false;
+    contextRestoreCount.value++;
+    // 重新初始化 ECharts 实例与 GL 资源（旧上下文无法复用）
+    initChart();
+    // 补渲丢失前最后一帧，避免画面停留在空白
+    const t = pendingFrameT;
+    pendingFrameT = null;
+    if (t != null) {
+      renderAt(t);
+      // 截帧模式需重新置就绪标记，避免出片管线误判为失败帧
+      if (props.captureT != null) document.body.dataset.ready = '1';
+    } else if (!recording) {
+      play();
+    }
+  };
+
+  canvas.addEventListener('webglcontextlost', contextLostHandler, false);
+  canvas.addEventListener('webglcontextrestored', contextRestoredHandler, false);
+  contextWatchedCanvas = canvas;
+}
+
+function detachContextWatchers() {
+  const canvas = contextWatchedCanvas || getCanvas();
+  if (canvas) {
+    if (contextLostHandler) canvas.removeEventListener('webglcontextlost', contextLostHandler, false);
+    if (contextRestoredHandler) canvas.removeEventListener('webglcontextrestored', contextRestoredHandler, false);
+  }
+  contextLostHandler = null;
+  contextRestoredHandler = null;
+  contextWatchedCanvas = null;
+}
+
 // —— 截帧模式：确定性单帧 ——
 function renderCapture(p) {
   applyFrame(clamp(Number(p) || 0, 0, 1));
@@ -423,11 +580,12 @@ function renderCapture(p) {
 // —— 交互模式：rAF 时间轴（与截帧共用 computeFrame，逐帧一致）——
 let rafId = null;
 let t0 = 0;
+let lastRenderedT = 0; // 最近一次渲染的时间轴进度（用于上下文恢复补渲）
 // 录制标记：为 true 时暂停 rAF 自动推进，改由外部逐帧 renderAt(t) 驱动，
 // 保证"导出内容"与"浏览器播放内容"逐帧一致（不受录制时机影响）。
 let recording = false;
 function loop(now) {
-  if (props.captureT != null || recording) return;
+  if (props.captureT != null || recording || isContextLost.value) return;
   if (!t0) t0 = now;
   const p = Math.min((now - t0) / (Number(props.duration) || 7200), 1);
   applyFrame(p);
@@ -442,7 +600,8 @@ function play() {
   if (rafId) cancelAnimationFrame(rafId);
   rafId = null;
   t0 = 0;
-  if (props.captureT != null || recording) return;
+  // 上下文丢失期间不启动循环，待恢复事件触发后再由 restored 回调续播
+  if (props.captureT != null || recording || isContextLost.value) return;
   rafId = requestAnimationFrame(loop);
 }
 
@@ -463,28 +622,42 @@ function endRecord() {
 }
 
 function render() {
+  // 上下文丢失期间不重建实例：留给 webglcontextrestored 回调统一处理，
+  // 否则会在 GL 不可用时反复 init 出坏实例。
+  if (isContextLost.value) return;
   if (!chart) return;
   if (props.captureT != null) renderCapture(props.captureT);
   else play();
+  // 兜底：若动画循环尚未跑到 setOption（极端时序），也尝试挂载一次监听。
+  ensureContextWatchers();
 }
-function resize() { chart && chart.resize(); }
+function resize() { chart && !isContextLost.value && chart.resize(); }
 
 onMounted(async () => {
   await nextTick();
-  chart = echarts.init(el.value, null, { renderer: 'canvas' });
+  initChart();
   render();
   window.addEventListener('resize', resize);
 });
 onBeforeUnmount(() => {
   window.removeEventListener('resize', resize);
+  detachContextWatchers();
   if (rafId) cancelAnimationFrame(rafId);
   chart && chart.dispose();
+  chart = null;
 });
 
 watch(() => props.captureT, () => render());
 watch(() => [props.items, props.theme, props.unit, props.fixed, props.reveal, props.duration], () => render(), { deep: true });
 
-defineExpose({ replay: play, render, computeFrame, beginRecord, renderAt, endRecord, getCanvas });
+defineExpose({
+  replay: play, render, computeFrame, beginRecord, renderAt, endRecord, getCanvas,
+  // 上下文状态：以**函数**形式暴露，避免 defineExpose 对 ref 的 unwrap 让调用方
+  // 拿到"某一时刻的快照值"而非实时状态。QA 据此断言丢失/恢复是否真的发生。
+  isContextLost: () => isContextLost.value,
+  getContextLossCount: () => contextLossCount.value,
+  getContextRestoreCount: () => contextRestoreCount.value,
+});
 
 // 返回真正可录制的 <canvas>。
 // 注意：chart.getDom() 返回的是 echarts 的**容器 div**（没有 captureStream），

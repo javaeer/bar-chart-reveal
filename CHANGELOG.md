@@ -1,5 +1,77 @@
 # 更新记录
 
+## v2.2.0 — WebGL 上下文容错 / 中文标签加固 / 配置健壮性 / CLI 体验
+
+本轮针对"无头逐帧截图 + 长时间预览"场景下的四个稳定性与体验问题做了修复，
+并为每项补上可复现的自动化验证。
+
+### 1. WebGL 上下文丢失导致渲染不可逆崩溃（`BarRace3D.vue`）
+
+**问题**：无头 Chromium 逐帧截图或长时间预览时 GPU 资源可能耗尽，触发
+`WebGL context lost`。原代码未监听该事件——浏览器默认行为会**永久销毁**上下文，
+渲染不可逆崩溃（画面从此空白）。
+
+**修复**：
+- 在图表容器内真正的 `<canvas>` 上监听 `webglcontextlost` / `webglcontextrestored`
+  （ECharts 容器 `div` 上不会冒泡该事件）。
+- 丢失时：`event.preventDefault()`（**关键**——不调用则浏览器不会派发 restore 事件）、
+  置 `isContextLost`、`cancelAnimationFrame` 暂停循环、记录待恢复帧进度。
+- 恢复时：`initChart()` 重建 ECharts 实例与 GL 资源，重放丢失前最后一帧；
+  截帧模式下重新置 `document.body.dataset.ready='1'`，避免出片管线误判失败帧。
+- 抽出 `initChart()` 供 `onMounted` 与恢复流程共用；每次重建后重新挂载监听。
+- 新增丢失/恢复计数（`getContextLossCount` / `getContextRestoreCount`）便于观测。
+
+**验证**：`verify.mjs` 用 `WEBGL_lose_context` 扩展强制丢失，断言事件被捕获、
+计数递增、页面无未捕获异常、canvas 未被销毁。
+（注：swiftshader/headless 下 `restoreContext()` 可能被浏览器拒绝——属环境限制，
+应用侧保证"捕获 + preventDefault + 暂停循环"。）
+
+### 2. 中文标签"逐字换行/竖排"（`index.html` / `BarRace3D.vue` / `config.js`）
+
+**问题**：无头环境或字体未完全加载时，canvas `measureText` 测量异常，把每个汉字
+当成超宽字符 → 标签逐字换行（视觉上竖排）。原 `document.fonts.ready` 守卫在极端情况下仍可能失效。
+
+**修复（三重保险）**：
+1. `index.html` 用 `@font-face` 显式声明 `Noto Sans CJK SC`（系统自带），
+   多 `local()` 回退 + `font-display: swap` + `<link rel="preload">`。
+2. `config.js` 的 `normalizeConfig` 为 `items.name` 增加**强制截断**：超过 12 个码点
+   即截为「前 12 字 + …」（按码点截断，不劈 emoji / 代理对），并输出告警。
+3. `BarRace3D.vue` 新增 `measureTextWidth()`，**每次测量前显式设置 ctx.font**
+   （`bold 16px "Noto Sans CJK SC",...`），杜绝字号/字体串污染；标签渲染字体与测量字体
+   统一由常量 `LABEL_FONT_FAMILY` / `LABEL_MEASURE_FONT` 管理，确保"测量=渲染"。
+   另按标签可用宽度二次收缩超长名称，从源头防重叠。
+
+**验证**：`verify.mjs` 新增 `label_overflow` 检测——页面内用同一字体测量
+「6 汉字」整串宽 / 单字宽，正常应 ≈6.00（逐字换行退化时会 ≈1）。
+
+### 3. 配置验证与数据健壮性（`config.js`）
+
+**问题**：`normalizeConfig` 对 `items` 的验证不够严格，非数字/负数/缺 `name` 的条目
+可能进入渲染，导致 ECharts 异常。
+
+**修复**：严格校验每条 `items`——非对象跳过、`name` 缺失/空白跳过、
+`value` 非有限数**归零**（保留条目便于定位脏数据）、负数**取绝对值**、
+名称去重、超长截断、`highlight` 布尔化；每类问题均写入 `warns`。**仍绝不抛异常**。
+
+**验证**：新增零依赖单元测试 `scripts/qa/config.test.mjs`（32 项断言），
+覆盖 `null` / 数组 / 原始值 / 空名 / `NaN` / `Infinity` / 负数 / 重名 / 超长名 /
+emoji 截断 / 顶层兜底等畸形输入。
+
+### 4. CLI 出片错误处理与体验（`capture-core.mjs` / `render.mjs`）
+
+**修复**：
+- `resolveChromium()` 未找到浏览器时，错误信息明确给出 `CHROMIUM_PATH` /
+  `CHROME_PATH` 用法与各平台安装命令。
+- `pickEncoder()` 未找到 `ffmpeg` 时给出"请安装 ffmpeg 并确保其在 PATH 中"+ 安装指引；
+  已装但无可用编码器时也给出针对性排查建议。
+- `render.mjs` 在 `main()` 开头校验 `--frames`（正整数 ≥2）与 `--fps`（1–60），
+  非法时列出具体问题并 `exit(2)`，避免跑很久才失败。
+
+**验证**：命令行实测非法参数（`--fps 99` / `--frames abc` / `--frames 1`）均给出
+明确提示；隔离环境下验证两条依赖缺失错误文案完整。
+
+---
+
 ## v2.1.0 — 修复镜头跟随 / 主体可见 / 导出与离线播放
 
 本轮针对用户反馈的三个问题做了根因修复，并补齐可复现的验证手段。

@@ -25,6 +25,8 @@ function parseArgs(argv) {
     config: 'samples/huining.json',
     view: null, theme: null,
     frames: 180, fps: 30,
+    // 原始字符串（用于非法值报错时回显用户实际输入，而非 parseInt 后的 NaN）
+    framesArg: null, fpsArg: null,
     out: null, poster: null,
     allViews: false,
   };
@@ -34,8 +36,8 @@ function parseArgs(argv) {
     else if (a === '--config') o.config = argv[++i];
     else if (a === '--view') o.view = argv[++i];
     else if (a === '--theme') o.theme = argv[++i];
-    else if (a === '--frames') o.frames = parseInt(argv[++i], 10);
-    else if (a === '--fps') o.fps = parseInt(argv[++i], 10);
+    else if (a === '--frames') { o.framesArg = argv[++i]; o.frames = parseInt(o.framesArg, 10); }
+    else if (a === '--fps') { o.fpsArg = argv[++i]; o.fps = parseInt(o.fpsArg, 10); }
     else if (a === '--out') o.out = argv[++i];
     else if (a === '--poster') o.poster = argv[++i];
     else { console.error('未知参数: ' + a); process.exit(2); }
@@ -50,8 +52,44 @@ function insertView(out, view) {
   return `${base}_${view}${ext || '.mp4'}`;
 }
 
+// —— 数值参数校验（任务四）——
+// 返回错误信息数组（空数组表示通过）。规则：
+//   · --frames：必须为正整数（≥2，出片至少需要 2 帧才能合成）
+//   · --fps   ：必须为 1..60 的整数
+// 说明：parseArgs 用 parseInt 解析，无法区分"未提供"与"非法"——未提供时取默认值，
+// 非法字符串会得到 NaN，故此处对 NaN 单独给出"应为整数"的提示。
+const FPS_MIN = 1, FPS_MAX = 60, FRAMES_MIN = 2;
+
+export function validateNumericArgs(o) {
+  const errors = [];
+
+  if (!Number.isInteger(o.frames) || Number.isNaN(o.frames)) {
+    errors.push(`--frames 应为整数，收到「${o.framesArg ?? o.frames}」`);
+  } else if (o.frames < FRAMES_MIN) {
+    errors.push(`--frames 应 ≥ ${FRAMES_MIN}（出片至少需要 ${FRAMES_MIN} 帧才能合成视频），收到 ${o.frames}`);
+  }
+
+  if (!Number.isInteger(o.fps) || Number.isNaN(o.fps)) {
+    errors.push(`--fps 应为整数，收到「${o.fpsArg ?? o.fps}」`);
+  } else if (o.fps < FPS_MIN || o.fps > FPS_MAX) {
+    errors.push(`--fps 应在 ${FPS_MIN}–${FPS_MAX} 之间，收到 ${o.fps}`);
+  }
+
+  return errors;
+}
+
 function main() {
   const opts = parseArgs(process.argv);
+
+  // —— 参数合法性校验（任务四）——
+  // 尽早失败：非法 --frames / --fps 直接在启动出片前拦下，避免跑了几分钟才报错。
+  const argErrors = validateNumericArgs(opts);
+  if (argErrors.length) {
+    console.error('❌ 参数不合法：');
+    argErrors.forEach((e) => console.error('   - ' + e));
+    console.error('\n用法示例：node scripts/render.mjs --frames 180 --fps 30');
+    process.exit(2);
+  }
 
   const cfgPath = path.resolve(root, opts.config);
   if (!fs.existsSync(cfgPath)) {
