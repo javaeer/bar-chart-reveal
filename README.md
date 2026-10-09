@@ -12,8 +12,9 @@
 
 | 能力 | 说明 |
 |---|---|
-| 配置驱动 | 数据/标题/主题/视图全部来自一个 JSON 配置，零代码改内容 |
+| 配置驱动 | 数据/标题/主题/形状全部来自一个 JSON 配置，零代码改内容 |
 | 多视图 | 一个 config 可含多个指标视图（如面积/人口/海拔/红色指数），分别出片 |
+| 多形状 | 方柱 / 立方体 / 圆柱 / 圆角柱 / 球体，视图级或全局指定，URL 可切换 |
 | 浏览器预览 | `npm run dev`，支持 `?t=` 确定性单帧、URL 参数切视图/主题/配置 |
 | CLI 出片 | `npm run render`，自动选编码器、自动 Xvfb、逐帧新浏览器进程 |
 
@@ -63,6 +64,7 @@ npm run render                      # 出片（默认 samples/huining.json 全�
   "title": "会宁县乡镇数据 · 3D 对比",
   "subtitle": "示例数据 · 用于演示工具通用性",
   "theme": "tech",                     // 主题名（见主题对象），或内联主题对象
+  "defaultShape": "bar",               // 全局默认形状，视图未指定时回退到它
   "highlightLabel": "重点",            // 高亮项图例文案（可空）
   "revealRatio": 0.72,                 // 0..1，逐条出现所占时间轴比例
   "durationMs": 7200,                  // 动画总时长（毫秒）
@@ -71,6 +73,7 @@ npm run render                      # 出片（默认 samples/huining.json 全�
       "key": "area",                   // 视图键（URL 参数用）
       "label": "行政区域面积",          // 完整标题
       "short": "面积",                 // 简称
+      "shape": "cylinder",             // 视图级形状，覆盖 defaultShape（可空）
       "unit": "km²",                   // 数值单位
       "fixed": 0,                      // 数值小数位
       "items": [
@@ -83,19 +86,44 @@ npm run render                      # 出片（默认 samples/huining.json 全�
 ```
 
 - 字段说明：`theme` 为主题名（如 `tech`/`aurora`/`sunset`/`mono`）或内联主题对象；`items` 中 `highlight:true` 的条目用高亮色（金色等）强调。
+- 形状：`shape`（视图级）/ `defaultShape`（顶层默认）取 `bar`（方柱，默认）/ `cube`（立方体）/ `cylinder`（圆柱）/ `rounded`（圆角柱/胶囊）/ `sphere`（球体）。优先级 **视图 `shape` > 顶层 `defaultShape` > `bar`**；非法值回退 `bar` 并产生告警。
 - 内置 `DEFAULT_CONFIG`（会宁县 4 视图 area/pop/elev/red，会师镇高亮）等价于原 `dataset.js`。
 - `normalizeConfig(raw)`：补齐默认值、过滤非法项（`value` 非数/负、`name` 空）、保证每个 `view` 至少 1 条 `items`；**不抛异常**，返回 `{ config, warns }`。
 - `encodeConfig(obj)` / `decodeConfig(str)`：base64url（UTF-8 安全，`+/`→`-_`、去 `=`），浏览器与 Node 通用，用于把配置塞进 URL 的 `cfg=` 参数。
 
+### 形状类型（Shape）
+
+| 形状 | 键名 | 渲染实现 | 适用场景 |
+|---|---|---|---|
+| 方柱 | `bar` | `bar3D`（小倒角） | 默认，最稳、最省性能 |
+| 立方体 | `cube` | `bar3D`（直角，正方形截面） | 强几何感、科技风 |
+| 圆柱 | `cylinder` | `bar3D`（`bevelSize=1` 全圆角截面） | 柔和的柱状观感 |
+| 圆角柱 | `rounded` | `bar3D`（中等倒角 + 正方形截面） | 现代卡片风 |
+| 球体 | `sphere` | `scatter3D`（半径编码数值） | 用**球径**而非柱高编码数值，视觉更活泼 |
+
+> **球体的语义差异**：球体用「球的直径」表达数值大小（球越大 = 数值越大），球心贴近底面；其余四种用「柱高」表达。同一视图内不要混用语义，画面才易读。
+> 切换形状时组件会自动 `notMerge` 重建场景；连续切换 5 种形状在 QA 中有「无未捕获异常」断言兜底。
+
+**球体的尺寸映射（v2.4.1）**：半径按 `ratio^0.68` 压缩（而非线性），兼顾"悬殊数据下小球不退化"与
+"大小差异仍清晰"；球体由**四层同心贴片**叠加（外圈光晕 / 主体 / 提亮过渡 / 近白高光）伪造径向受光，
+因为 echarts-gl 的 `scatter3D` 是恒正对相机的 billboard 贴片、本身无光照（单层会像扁圆点）。
+尺寸会随相机距离做透视补偿，全景收尾时球群仍饱满。
+
+### 控件面板（科技风 dock）
+
+底部控件为**分组胶囊 dock**：`视图 / 形状 / 主题 / 操作` 四组，桌面 2×2、窄屏单列堆叠；
+形状按钮带内联 SVG 几何图标，选中态为青蓝渐变实心胶囊 + 外发光。
+根节点保留 `.ui` 类作为 DOM 契约（既有脚本/自定义样式可继续选择）。
+
 ### 如何新增数据集
 
-1. 复制 `samples/huining.json`，改 `title`/`subtitle`/`views`（视图即指标，`items` 即条目）。
+1. 复制 `samples/huining.json`，改 `title`/`subtitle`/`views`（视图即指标，`items` 即条目），可按需加 `shape`/`defaultShape`。
 2. 数据务必标注性质：真实数据请注明来源；示例/合成数据请写明「示例数据 · 用于演示工具通用性」，避免编造易被证伪的事实。
 3. 浏览器里可直接用 URL 预览，无需构建：
    ```
-   /?t=0.5&view=area&theme=tech&cfg=<base64url(configJSON)>
+   /?t=0.5&view=area&theme=tech&shape=cylinder&cfg=<base64url(configJSON)>
    ```
-   （`cfg` 由 `encodeConfig` 生成；也可把 JSON 存为 `samples/xxx.json` 用 CLI 出片。）
+   （`cfg` 由 `encodeConfig` 生成；`shape=` 可在运行时覆盖形状，便于快速比稿。）
 
 ---
 
@@ -111,6 +139,7 @@ node scripts/render.mjs --config samples/huining.json [--view area] [--theme tec
 | `--config` | `samples/huining.json` | 配置 JSON 路径 |
 | `--view` | 全部视图 | 仅渲染指定 `view` 键；省略则渲染全部（`--all-views` 等价） |
 | `--theme` | 配置内 `theme` | 覆盖主题名 |
+| `--shape` | 配置内 `shape` | 覆盖形状（`bar`/`cube`/`cylinder`/`rounded`/`sphere`） |
 | `--frames` | `180` | 截帧数（≥2） |
 | `--fps` | `30` | 输出帧率 |
 | `--out` | `out/<configName>_<view>.<编码器扩展名>` | 输出视频路径（多视图时自动插入 `_<view>`） |
@@ -137,16 +166,26 @@ node scripts/render.mjs --config samples/planets.json --all-views --frames 240
 
 ## 四·五、质量保障（QA）
 
-内置三套验证脚本（前两套复用出片管线环境，第三套为零依赖纯逻辑单元测试）：
+内置六套验证脚本（均可直接运行，无需手动先起 dev server）：
 
 ```bash
-node scripts/qa/config.test.mjs    # 纯逻辑单元测试：配置规范化 / 数据健壮性（无需浏览器）
-node scripts/qa/verify.mjs         # 构图硬指标（全景+跟随期）/ 逐条出现 / 镜头跟随 / 确定性 / 标签覆盖与换行 / WebGL 上下文丢失
-node scripts/qa/interact.mjs       # 交互回归：视图·主题切换 / 重播 / 数据表 / CSV / 控制台异常
-node scripts/qa/verify-playback.mjs # 真实播放模式全程采样：断言无空白帧（需 dev server）
-node scripts/qa/diag-frames.mjs    # 相机构图预览：多 t 值截帧（调参迭代用）
-node scripts/qa/diag-calib2.mjs    # 相机注视点标定：扫描 cy 实测地面线位置（调参迭代用）
+# —— npm 快捷入口（推荐）——
+npm test                # 纯逻辑单元测试（无需浏览器）
+npm run qa              # verify.mjs + interact.mjs（需 chromium + Xvfb）
+npm run qa:playback     # 真实播放模式全程采样（自动构建 + 自启静态服务）
+npm run qa:all          # 一键跑全部 QA
+
+# —— 直接调用 ——
+node scripts/qa/config.test.mjs     # 纯逻辑单元测试：配置规范化 / 数据健壮性（无需浏览器）
+node scripts/qa/verify.mjs          # 构图硬指标（全景+跟随期）/ 形状渲染 / 逐条出现 / 镜头跟随 / 确定性 / 标签覆盖与换行 / WebGL 上下文丢失
+node scripts/qa/interact.mjs        # 交互回归：视图·主题切换 / 重播 / 数据表 / CSV / 控制台异常
+node scripts/qa/verify-playback.mjs # 真实播放模式全程采样：断言无空白帧（自动构建 dist + 自启静态服务）
+node scripts/qa/diag-frames.mjs     # 相机构图预览：多 t 值截帧（调参迭代用）
+node scripts/qa/diag-calib2.mjs     # 相机注视点标定：扫描 cy 实测地面线位置（调参迭代用）
 ```
+
+> 截图/中间产物默认写入系统临时目录（`os.tmpdir()`），可用环境变量 `QA_ART=/your/dir` 覆盖。
+> 浏览器可通过 `CHROMIUM_PATH` / `CHROME_PATH` 指定；无显示器环境脚本会自动拉起 Xvfb。
 
 `verify.mjs` 会输出每项指标实测值（例：全景柱体外接框 **宽 98.3% / 高 47%–49%**，远超 ≥62%/≥45% 的硬指标；
 跟随期柱底 85.7% 完整入画、同框内容 84.8%；逐条出现亮像素质心 1.8k→700k 单调增长；镜头跟随内容质心
@@ -156,16 +195,18 @@ node scripts/qa/diag-calib2.mjs    # 相机注视点标定：扫描 cy 实测地
 
 | 项目 | 结果 |
 |---|---|
-| 构图（4 视图全景） | 宽 98.3% / 高 46%–49%（硬指标 ≥62%/≥45%）✅ |
-| 跟随期构图（v2.3.0 新增） | 柱底 85.7%（≤98% 硬指标）/ 同框内容 84.8% ✅ |
-| 由低到高逐条出现 | 亮像素 1,841 → 700,516，单调增 ✅ |
-| 镜头跟随 | 内容质心活动范围 Δcx = 177px ✅ |
-| 结尾全景 | 跟随末帧 84.8% 宽 → 全景 78.8%，全柱入画 ✅ |
-| 确定性（同 t 两次） | 像素差异 0.000% ✅ |
+| 构图（4 视图全景） | 宽 98.3% / 高 46%–53%（柱体族硬指标 ≥62%/≥45%；球体视图高占比放宽至 ≥18%）✅ |
+| 形状渲染（v2.4.0 新增） | bar/cube/cylinder/rounded 亮像素均 >55 万、sphere 10.6 万，连续切换 5 种形状零异常 ✅ |
+| 跟随期构图（v2.3.0 新增） | 柱底 83.7%（≤98% 硬指标）/ 同框内容 84.1% ✅ |
+| 由低到高逐条出现 | 亮像素 1,841 → 572,930，单调增 ✅ |
+| 镜头跟随 | 内容质心活动范围 Δcx = 202px ✅ |
+| 结尾全景 | 跟随末帧 84.1% 宽 → 全景 78.8%，全柱入画 ✅ |
+| 确定性（同 t 两次） | 像素差异 0.002% ✅ |
 | 标签覆盖（v2.3.1 新增） | 海拔 7/7、面积 14/14 全贴；人口/红色（n=28）全景 15 个、跟随期 14 个（修复前仅 4 个）✅ |
 | 中文标签（label_overflow） | 整串测宽/单字宽 = 6.00（无逐字竖排）✅ |
 | WebGL 上下文丢失 | 事件捕获 + 暂停循环 + 无未捕获异常 ✅ |
-| 配置单元测试 | 32/32 通过 ✅ |
+| 配置单元测试 | 47/47 通过 ✅（v2.4.0 增补 15 项形状断言） |
+| QA 汇总 | 35/35 通过 ✅（v2.4.1 构图断言按形状区分阈值） |
 | 交互回归 | 7/7 通过（视图/主题/重播/数据表/CSV/控制台零异常）✅ |
 
 > **WebGL 上下文容错说明**：`BarRace3D` 监听 `webglcontextlost`/`webglcontextrestored`。

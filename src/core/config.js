@@ -4,6 +4,31 @@
 // 不 import 任何 DOM / Node 专属模块，确保浏览器与 Node 端均可直接复用。
 
 // ───────────────────────────────────────────────────────────
+// 2.0 形状类型（shape）
+//   bar      方柱（默认，轻微圆角）
+//   cube     立方体（直角截面，正方形底）
+//   rounded  圆角柱（较大圆角）
+//   cylinder 圆柱（bar3D + 截面完全圆化近似；echarts-gl 无原生圆柱）
+//   sphere   球体（走 scatter3D 分支，球径编码数值）
+// ───────────────────────────────────────────────────────────
+export const SHAPES = ['bar', 'cube', 'cylinder', 'rounded', 'sphere'];
+export const SHAPE_LABELS = {
+  bar: '方柱',
+  cube: '立方体',
+  cylinder: '圆柱',
+  rounded: '圆角柱',
+  sphere: '球体',
+};
+const DEFAULT_SHAPE = 'bar';
+
+// 把任意输入规范化为合法 shape 名；非法时返回 null（由调用方决定回退与告警）
+export function normalizeShape(v) {
+  if (typeof v !== 'string') return null;
+  const s = v.trim().toLowerCase();
+  return SHAPES.includes(s) ? s : null;
+}
+
+// ───────────────────────────────────────────────────────────
 // 2.1 默认值
 // ───────────────────────────────────────────────────────────
 const DEFAULTS = {
@@ -13,6 +38,7 @@ const DEFAULTS = {
   highlightLabel: '重点',
   revealRatio: 0.72,
   durationMs: 7200,
+  defaultShape: DEFAULT_SHAPE,
 };
 
 // item.name 最大字符数：超出则截断为「前 N 字 + …」。
@@ -41,6 +67,7 @@ export function normalizeConfig(raw) {
     highlightLabel: '重点',
     revealRatio: 0.72,
     durationMs: 7200,
+    defaultShape: DEFAULT_SHAPE,
     views: [],
   };
 
@@ -76,6 +103,13 @@ export function normalizeConfig(raw) {
   }
   out.durationMs = Math.round(dm);
 
+  // —— defaultShape（顶层默认形状；视图未指定 shape 时回退到它）——
+  if (raw.defaultShape != null) {
+    const ds = normalizeShape(raw.defaultShape);
+    if (ds) out.defaultShape = ds;
+    else warns.push(`defaultShape 非法(${raw.defaultShape})，回退默认 ${DEFAULT_SHAPE}`);
+  }
+
   // —— views ——
   if (!Array.isArray(raw.views)) {
     warns.push('缺少 views 数组，未生成任何视图');
@@ -98,9 +132,17 @@ export function normalizeConfig(raw) {
             : `视图${vi}`,
       short: typeof v.short === 'string' ? v.short : '',
       unit: typeof v.unit === 'string' ? v.unit : '',
+      // 形状：视图级优先，缺省回退顶层 defaultShape，再回退 bar；非法值告警并回退
+      shape: out.defaultShape,
       fixed: 0,
       items: [],
     };
+
+    if (v.shape != null) {
+      const sh = normalizeShape(v.shape);
+      if (sh) view.shape = sh;
+      else warns.push(`views[${vi}].shape 非法(${v.shape})，回退 ${out.defaultShape}`);
+    }
 
     let f = Number(v.fixed);
     if (!Number.isFinite(f) || f < 0) {

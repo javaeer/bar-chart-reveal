@@ -2,6 +2,7 @@
   "title": "某科技公司 · 部门季度产出对比",
   "subtitle": "示例/合成数据 · 用于演示工具通用性（非真实企业数据）",
   "theme": "aurora",
+  "defaultShape": "bar",
   "highlightLabel": "明星部门",
   "revealRatio": 0.72,
   "durationMs": 7200,
@@ -9,57 +10,125 @@
     {
       "key": "q1",
       "label": "Q1 产出",
+      "shape": "bar",
       "short": "Q1",
       "unit": "万元",
       "fixed": 0,
       "items": [
-        { "name": "研发部", "value": 320 },
-        { "name": "市场部", "value": 180 },
-        { "name": "销售部", "value": 410, "highlight": true },
-        { "name": "运营部", "value": 150 },
-        { "name": "客服部", "value": 90 }
+        {
+          "name": "研发部",
+          "value": 320
+        },
+        {
+          "name": "市场部",
+          "value": 180
+        },
+        {
+          "name": "销售部",
+          "value": 410,
+          "highlight": true
+        },
+        {
+          "name": "运营部",
+          "value": 150
+        },
+        {
+          "name": "客服部",
+          "value": 90
+        }
       ]
     },
     {
       "key": "q2",
       "label": "Q2 产出",
+      "shape": "cylinder",
       "short": "Q2",
       "unit": "万元",
       "fixed": 0,
       "items": [
-        { "name": "研发部", "value": 360 },
-        { "name": "市场部", "value": 220 },
-        { "name": "销售部", "value": 470, "highlight": true },
-        { "name": "运营部", "value": 170 },
-        { "name": "客服部", "value": 110 }
+        {
+          "name": "研发部",
+          "value": 360
+        },
+        {
+          "name": "市场部",
+          "value": 220
+        },
+        {
+          "name": "销售部",
+          "value": 470,
+          "highlight": true
+        },
+        {
+          "name": "运营部",
+          "value": 170
+        },
+        {
+          "name": "客服部",
+          "value": 110
+        }
       ]
     },
     {
       "key": "q3",
       "label": "Q3 产出",
+      "shape": "cube",
       "short": "Q3",
       "unit": "万元",
       "fixed": 0,
       "items": [
-        { "name": "研发部", "value": 410 },
-        { "name": "市场部", "value": 260 },
-        { "name": "销售部", "value": 520, "highlight": true },
-        { "name": "运营部", "value": 210 },
-        { "name": "客服部", "value": 130 }
+        {
+          "name": "研发部",
+          "value": 410
+        },
+        {
+          "name": "市场部",
+          "value": 260
+        },
+        {
+          "name": "销售部",
+          "value": 520,
+          "highlight": true
+        },
+        {
+          "name": "运营部",
+          "value": 210
+        },
+        {
+          "name": "客服部",
+          "value": 130
+        }
       ]
     },
     {
       "key": "q4",
       "label": "Q4 产出",
+      "shape": "sphere",
       "short": "Q4",
       "unit": "万元",
       "fixed": 0,
       "items": [
-        { "name": "研发部", "value": 480 },
-        { "name": "市场部", "value": 300 },
-        { "name": "销售部", "value": 610, "highlight": true },
-        { "name": "运营部", "value": 240 },
-        { "name": "客服部", "value": 160 }
+        {
+          "name": "研发部",
+          "value": 480
+        },
+        {
+          "name": "市场部",
+          "value": 300
+        },
+        {
+          "name": "销售部",
+          "value": 610,
+          "highlight": true
+        },
+        {
+          "name": "运营部",
+          "value": 240
+        },
+        {
+          "name": "客服部",
+          "value": 160
+        }
       ]
     }
   ]

@@ -78,15 +78,16 @@ function apply() {
 
 <style scoped>
 .overlay {
-  position: fixed; inset: 0; z-index: 30;
+  position: fixed; inset: 0; z-index: var(--z-overlay);
   background: rgba(3, 5, 11, 0.62);
   display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(2px);
 }
 .box {
   width: min(720px, 92vw); max-height: 84vh; overflow: auto;
   padding: 22px 24px; background: #0b1322;
-  border: 1px solid rgba(53, 208, 255, 0.35); border-radius: 16px;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(53, 208, 255, 0.35); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
 }
 h3 { margin: 0 0 4px; color: #eaf6ff; font-size: 17px; letter-spacing: 1px; }
 h3 small { color: #7fa8c9; font-weight: 400; font-size: 13px; }
@@ -94,21 +95,34 @@ h3 small { color: #7fa8c9; font-weight: 400; font-size: 13px; }
 .scroll { max-height: 52vh; overflow: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { padding: 6px 8px; border-bottom: 1px solid rgba(53, 208, 255, 0.14); color: #cfe6ff; text-align: left; }
-th { color: #8fb6d6; font-weight: 600; }
+th { color: #8fb6d6; font-weight: 600; position: sticky; top: 0; background: #0b1322; z-index: 1; }
 th small { color: #6f92b0; font-weight: 400; }
 td input[type="text"], td input[type="number"] {
   width: 100%; padding: 5px 7px; background: #0a1424;
   border: 1px solid rgba(53, 208, 255, 0.25); border-radius: 6px;
-  color: #eaf6ff; font-size: 13px;
+  color: #eaf6ff; font-size: 13px; font-variant-numeric: tabular-nums;
+  transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+  font-family: inherit;
+}
+td input[type="text"]:focus, td input[type="number"]:focus {
+  outline: none; border-color: var(--cy); box-shadow: 0 0 0 3px rgba(53, 208, 255, 0.15);
 }
 td.c { text-align: center; }
 .del { background: transparent; border: none; color: #ff6b8a; cursor: pointer; font-size: 15px; }
 .del:disabled { color: #44506a; cursor: not-allowed; }
 .actions { margin-top: 16px; display: flex; gap: 10px; align-items: center; }
 .spacer { flex: 1; }
-button { cursor: pointer; border-radius: 9px; font-size: 14px; padding: 8px 16px; transition: all 0.18s ease; }
+button { cursor: pointer; border-radius: var(--radius-sm); font-size: 14px; padding: 8px 16px; transition: all var(--t-fast) var(--ease); font-family: inherit; }
 .ghost { border: 1px solid rgba(53, 208, 255, 0.35); background: rgba(53, 208, 255, 0.08); color: #cdeaff; }
 .ghost:hover { background: rgba(53, 208, 255, 0.22); color: #fff; }
 .primary { background: #35d0ff; color: #04121f; border: 1px solid #35d0ff; font-weight: 700; }
 .primary:hover { filter: brightness(1.08); }
+button:focus-visible { outline: 2px solid var(--cy); outline-offset: 2px; }
+
+@media (max-width: 720px) {
+  .box { padding: 16px 14px; width: 94vw; max-height: 88vh; }
+  .scroll { max-height: 56vh; }
+  th, td { padding: 5px 6px; font-size: 12.5px; }
+  button { padding: 7px 12px; font-size: 13px; }
+}
 </style>

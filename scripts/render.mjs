@@ -3,13 +3,15 @@
 //
 // 用法：
 //   node scripts/render.mjs --config samples/huining.json [--view area] [--theme tech] \
-//     [--frames 180] [--fps 30] [--out out/huining_area.mp4] [--poster out/huining_area.png] [--all-views]
+//     [--shape cylinder] [--frames 180] [--fps 30] \
+//     [--out out/huining_area.mp4] [--poster out/huining_area.png] [--all-views]
 //
 // 说明：
 //   - 缺省 --config=samples/huining.json --frames=180 --fps=30
 //   - 不指定 --view 时渲染该 config 的全部 views（等价于 --all-views）
+//   - --shape 覆盖形状：bar/cube/cylinder/rounded/sphere（缺省用配置内 shape/defaultShape）
 //   - 缺省输出 out/<configName>_<view>.<encExt>（encExt 由可用编码器决定：mp4/webm）
-//   - 页面 URL 契约：/?t=<0..1>&view=<viewKey>&theme=<themeName>&cfg=<base64url(configJSON)>
+//   - 页面 URL 契约：/?t=<0..1>&view=<viewKey>&theme=<themeName>&shape=<shape>&cfg=<base64url(configJSON)>
 //     cfg 由 src/core/config.js 的 encodeConfig 生成（UTF-8 安全）。
 import fs from 'node:fs';
 import path from 'node:path';
@@ -23,7 +25,7 @@ const root = path.resolve(__dirname, '..');
 function parseArgs(argv) {
   const o = {
     config: 'samples/huining.json',
-    view: null, theme: null,
+    view: null, theme: null, shape: null,
     frames: 180, fps: 30,
     // 原始字符串（用于非法值报错时回显用户实际输入，而非 parseInt 后的 NaN）
     framesArg: null, fpsArg: null,
@@ -36,6 +38,7 @@ function parseArgs(argv) {
     else if (a === '--config') o.config = argv[++i];
     else if (a === '--view') o.view = argv[++i];
     else if (a === '--theme') o.theme = argv[++i];
+    else if (a === '--shape') o.shape = argv[++i];
     else if (a === '--frames') { o.framesArg = argv[++i]; o.frames = parseInt(o.framesArg, 10); }
     else if (a === '--fps') { o.fpsArg = argv[++i]; o.fps = parseInt(o.fpsArg, 10); }
     else if (a === '--out') o.out = argv[++i];
@@ -112,6 +115,17 @@ function main() {
 
   const configName = path.basename(opts.config).replace(/\.json$/i, '');
   const themeName = opts.theme || (typeof config.theme === 'string' ? config.theme : 'tech');
+  // --shape 覆盖：仅接受合法形状，非法值直接报错（避免静默回退后出片与预期不符）
+  const SHAPE_KEYS = ['bar', 'cube', 'cylinder', 'rounded', 'sphere'];
+  let shapeName = null;
+  if (opts.shape != null) {
+    const s = String(opts.shape).trim().toLowerCase();
+    if (!SHAPE_KEYS.includes(s)) {
+      console.error(`❌ --shape 非法（${opts.shape}），可选：${SHAPE_KEYS.join(' / ')}`);
+      process.exit(2);
+    }
+    shapeName = s;
+  }
   const cfgB64 = encodeConfig(config);
 
   // 决定本次要渲染的 view 列表
@@ -131,7 +145,9 @@ function main() {
     for (const view of views) {
       const label = (config.views.find((v) => v.key === view) || {}).label || view;
       const urlForFrame = (t) =>
-        `/?t=${t.toFixed(4)}&view=${encodeURIComponent(view)}&theme=${encodeURIComponent(themeName)}&cfg=${cfgB64}`;
+        `/?t=${t.toFixed(4)}&view=${encodeURIComponent(view)}&theme=${encodeURIComponent(themeName)}`
+        + (shapeName ? `&shape=${encodeURIComponent(shapeName)}` : '')
+        + `&cfg=${cfgB64}`;
       const outRel = opts.out
         ? (multi ? insertView(opts.out, view) : opts.out)
         : path.join('out', `${configName}_${view}.${enc.ext}`);

@@ -2,6 +2,7 @@
 // 用法：node scripts/qa/verify.mjs
 // 依赖：puppeteer-core（项目 devDep）+ 系统 chromium + Xvfb。复用 capture-core 的环境逻辑。
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
@@ -12,7 +13,11 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..', '..');
-const ART = '/root/.codebuddy/artifact/2f8a7d30-9c21-4f0b-1d2d-3cf38b318000/qa';
+// 产物目录：默认写到系统临时目录，可用环境变量 QA_ART 覆盖。
+// （此前硬编码了某个绝对路径，换机/换用户必然失败。）
+const ART = process.env.QA_ART
+  ? path.resolve(process.env.QA_ART)
+  : path.join(os.tmpdir(), 'bar-chart-reveal-qa');
 fs.mkdirSync(ART, { recursive: true });
 
 const W = 1920, H = 1080;
@@ -108,12 +113,48 @@ async function main() {
 
   try {
     // ── 1) 全景构图硬指标（4 个 view）──
+    // 柱体家族（bar/cube/cylinder/rounded）：柱体高耸 → 宽/高占比都要够（宽≥62%、高≥45%）。
+    // 球体（sphere）：球是圆的且横向铺满，垂直方向只占球径量级 → 高占比天然远低于柱体
+    //   （实测 h≈25~32%），故球体视图放宽高占比阈值（≥18%），宽占比仍按 ≥62% 要求。
     for (const v of cfg.views) {
+      const isSph = v.shape === 'sphere';
       const png = await shoot(1, `pano_${v.key}.png`, `&view=${v.key}`);
       const a = analyze(png, { topSkip: 110, bottomSkip: 0 }); // 跳过顶部标题区
       check(`构图·${v.key} 全景宽占比 ≥62%`, a.w >= 0.62, `w=${(a.w * 100).toFixed(1)}%`);
-      check(`构图·${v.key} 全景高占比 ≥45%`, a.h >= 0.45, `h=${(a.h * 100).toFixed(1)}%`);
+      check(
+        `构图·${v.key} 全景高占比 ≥${isSph ? 18 : 45}%`,
+        a.h >= (isSph ? 0.18 : 0.45),
+        `h=${(a.h * 100).toFixed(1)}%${isSph ? '（球体）' : ''}`,
+      );
     }
+
+    // ── 1b) 形状类型渲染（bar / cube / cylinder / rounded / sphere）──
+    // 用 URL 参数逐个切换形状，各自渲染一帧全景并断言画面非空白（亮像素 > 阈值）。
+    // 覆盖两类渲染路径：bar3D 变体（bar/cube/cylinder/rounded，靠 bevel 区分）与
+    // scatter3D 球体（sphere，独立 series 分支）。
+    // 阈值取偏保守值（>20000）——球体亮像素天然少于柱体，但仍远高于空白帧。
+    const SHAPE_MIN_PIXELS = { bar: 40000, cube: 40000, cylinder: 40000, rounded: 40000, sphere: 15000 };
+    const shapes = ['bar', 'cube', 'cylinder', 'rounded', 'sphere'];
+    for (const s of shapes) {
+      // 用 area 视图（14 条），各形状渲染一帧全景
+      const png = await shoot(0.72, `shape_${s}.png`, `&view=area&shape=${s}`);
+      const a = analyze(png, { topSkip: 110, bottomSkip: 60, xSkip: 100 });
+      const min = SHAPE_MIN_PIXELS[s];
+      check(`形状·${s} 渲染非空白（亮像素 ≥${min}）`, a.cnt >= min, `cnt=${a.cnt}`);
+    }
+
+    // 形状切换期无未捕获异常（同一页面内连续切换 5 种形状）
+    const shapeSwitchErrors = await withPage(async (page) => {
+      const errors = [];
+      page.on('pageerror', (e) => errors.push(String(e && e.message ? e.message : e)));
+      for (const s of shapes) {
+        await page.goto(`${srv.base}${url(0.72, `&view=area&shape=${s}`)}`, { waitUntil: 'load' });
+        await page.waitForFunction(() => document.body.dataset.ready === '1', { timeout: 30000 });
+      }
+      return errors;
+    });
+    check('形状·连续切换 5 种形状页面无未捕获异常', shapeSwitchErrors.length === 0,
+      shapeSwitchErrors.join(' | '));
 
     // ── 2) 由低到高逐条出现（亮柱像素随 t 单调增）──
     const ts = [0.0, 0.18, 0.36, 0.54, 0.72];

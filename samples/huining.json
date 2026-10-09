@@ -2,12 +2,14 @@
   "title": "会宁县乡镇数据 · 3D 对比",
   "subtitle": "数据来源：会宁县人民政府官网乡镇概况 · 第七次全国人口普查 · 2025 会宁县统计公报",
   "theme": "tech",
+  "defaultShape": "bar",
   "revealRatio": 0.72,
   "durationMs": 9000,
   "views": [
     {
       "key": "area",
       "label": "行政区域面积",
+      "shape": "cylinder",
       "short": "面积",
       "unit": "km²",
       "fixed": 0,
@@ -87,6 +89,7 @@
     {
       "key": "pop",
       "label": "常住人口",
+      "shape": "bar",
       "short": "人口",
       "unit": "万人",
       "fixed": 2,
@@ -236,6 +239,7 @@
     {
       "key": "elev",
       "label": "平均海拔",
+      "shape": "rounded",
       "short": "海拔",
       "unit": "m",
       "fixed": 0,
@@ -280,6 +284,7 @@
     {
       "key": "red",
       "label": "红色资源指数",
+      "shape": "sphere",
       "short": "红色",
       "unit": "",
       "fixed": 0,

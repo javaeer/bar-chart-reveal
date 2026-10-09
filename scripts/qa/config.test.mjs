@@ -1,7 +1,7 @@
 // 纯逻辑单元测试：normalizeConfig 的数据健壮性（任务三）
 // 用法：node scripts/qa/config.test.mjs
 // 无外部依赖，不需要浏览器 / 字体 / GL——直接以 Node 运行。
-import { normalizeConfig, truncateName } from '../../src/core/config.js';
+import { normalizeConfig, truncateName, SHAPES, normalizeShape } from '../../src/core/config.js';
 
 let pass = 0, fail = 0;
 const results = [];
@@ -143,6 +143,50 @@ const { config: c7, warns: w7 } = normalizeConfig({
 });
 ok('正常配置：零告警通过', w7.length === 0, w7.join(' | '));
 ok('正常配置：条目完整保留', c7.views[0].items.length === 2, '');
+
+// ───────────────────────────────────────────────────────────
+// 4) 形状（shape）规范化
+// ───────────────────────────────────────────────────────────
+ok('SHAPES：共 5 种形状', Array.isArray(SHAPES) && SHAPES.length === 5, SHAPES.join(','));
+ok('SHAPES：包含 bar/cube/cylinder/rounded/sphere',
+  ['bar', 'cube', 'cylinder', 'rounded', 'sphere'].every((s) => SHAPES.includes(s)), SHAPES.join(','));
+
+ok('normalizeShape：合法值原样返回', normalizeShape('cylinder') === 'cylinder', String(normalizeShape('cylinder')));
+ok('normalizeShape：大小写不敏感', normalizeShape('SPHERE') === 'sphere', String(normalizeShape('SPHERE')));
+ok('normalizeShape：首尾空白裁剪', normalizeShape('  cube  ') === 'cube', String(normalizeShape('  cube  ')));
+ok('normalizeShape：非法值 → null', normalizeShape('pyramid') === null, String(normalizeShape('pyramid')));
+ok('normalizeShape：非字符串 → null',
+  normalizeShape(123) === null && normalizeShape(null) === null && normalizeShape(undefined) === null && normalizeShape({}) === null, '');
+
+// 缺省：未指定 shape / defaultShape → 均为 'bar'，且不产生告警
+const { config: c8, warns: w8 } = normalizeConfig({
+  revealRatio: 0.7, durationMs: 6000,
+  views: [{ key: 'a', label: 'A', unit: 'u', fixed: 0, items: [{ name: '甲', value: 1 }, { name: '乙', value: 2 }] }],
+});
+ok('shape 缺省：顶层 defaultShape → bar', c8.defaultShape === 'bar', String(c8.defaultShape));
+ok('shape 缺省：视图 shape → 继承 bar', c8.views[0].shape === 'bar', String(c8.views[0].shape));
+ok('shape 缺省：不产生告警', w8.length === 0, w8.join(' | '));
+
+// 顶层默认 + 视图覆盖
+const { config: c9, warns: w9 } = normalizeConfig({
+  revealRatio: 0.7, durationMs: 6000, defaultShape: 'sphere',
+  views: [
+    { key: 'a', label: 'A', unit: 'u', fixed: 0, shape: 'cylinder', items: [{ name: '甲', value: 1 }] },
+    { key: 'b', label: 'B', unit: 'u', fixed: 0, items: [{ name: '乙', value: 2 }] },
+  ],
+});
+ok('shape：视图覆盖顶层默认', c9.views[0].shape === 'cylinder', String(c9.views[0].shape));
+ok('shape：未指定视图继承顶层默认', c9.views[1].shape === 'sphere', String(c9.views[1].shape));
+
+// 非法值：回退 + 告警（顶层与视图各一）
+const { config: c10, warns: w10 } = normalizeConfig({
+  revealRatio: 0.7, durationMs: 6000, defaultShape: 'pyramid',
+  views: [{ key: 'a', label: 'A', unit: 'u', fixed: 0, shape: 'hexagon', items: [{ name: '甲', value: 1 }] }],
+});
+ok('shape 非法：顶层回退 bar', c10.defaultShape === 'bar', String(c10.defaultShape));
+ok('shape 非法：视图回退 bar', c10.views[0].shape === 'bar', String(c10.views[0].shape));
+ok('shape 非法：顶层与视图各产生一条告警',
+  w10.filter((w) => /shape/i.test(w)).length === 2, w10.filter((w) => /shape/i.test(w)).join(' | '));
 
 console.log(`\n==== 单元测试汇总：${pass}/${pass + fail} 通过 ====`);
 if (fail) process.exitCode = 1;

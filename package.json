@@ -1,8 +1,11 @@
 {
   "name": "bar-chart-reveal",
-  "version": "2.3.1",
-  "description": "配置驱动的 3D 柱状赛跑可视化与出片工具（Vue3 + ECharts-GL，任意数据集/主题/标题）",
+  "version": "2.4.1",
+  "description": "配置驱动的 3D 柱状赛跑可视化与出片工具（Vue3 + ECharts-GL，任意数据集/主题/标题/形状）",
   "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -13,7 +16,9 @@
     "capture": "node scripts/capture.mjs",
     "render": "node scripts/render.mjs",
     "test": "node scripts/qa/config.test.mjs",
-    "qa": "node scripts/qa/verify.mjs && node scripts/qa/interact.mjs"
+    "qa": "node scripts/qa/verify.mjs && node scripts/qa/interact.mjs",
+    "qa:playback": "node scripts/qa/verify-playback.mjs",
+    "qa:all": "npm test && node scripts/qa/verify.mjs && node scripts/qa/interact.mjs && node scripts/qa/verify-playback.mjs"
   },
   "dependencies": {
     "echarts": "^5.5.1",
@@ -23,6 +28,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.4",
+    "pngjs": "^7.0.0",
     "puppeteer-core": "^22.15.0",
     "vite": "^5.3.1",
     "vite-plugin-singlefile": "^2.3.3"

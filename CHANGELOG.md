@@ -1,5 +1,147 @@
 # 更新记录
 
+## v2.4.1 — 控件面板「科技风」重构 + 球体立体感与构图修复
+
+本轮聚焦**交互控件视觉升级**与**球体形状质量**，不改变柱体家族渲染与出片契约。
+回归：单元测试 **47/47**、QA **35/35**、交互 **7/7**、播放全程无空白帧。
+
+### 1. 底部控件面板重构为「科技风分组 dock」（`MetricBar.vue`）
+
+- **布局**：从"一整排平铺按钮"改为**四组语义化胶囊段**——`视图 / 形状 / 主题 / 操作`，
+  每组 = 分组标签（`group-tag`）+ 胶囊容器（`seg`）+ 段内按钮（`seg-btn`）。
+  桌面端 2×2 网格，窄屏自动堆叠为单列。
+- **科技风细节**：外壳四角 `clip-path` 切角 + 顶部 `dock-glow` 流光细线 +
+  半透明毛玻璃（`backdrop-filter`）+ 内描边高光。
+- **选中态**：青蓝渐变实心胶囊 + 外发光 + 内高光，`active` 语义清晰。
+- **形状图标**：为 5 种形状各绘制一枚内联 SVG 几何图标（方柱/立方体/圆柱/圆角柱/球体），
+  用 `currentColor` 随选中态变色，直观区分形状。
+- **响应式三段断点**：`≤1180px` 单列堆叠 + 段内换行；`≤720px` 紧凑化；
+  `≤480px` 隐藏视图小圆点、形状按钮只留图标。
+- **DOM 契约保持**：根节点保留 `.ui` 类，`interact.mjs` 等既有选择器无需改动即通过。
+
+### 2. 交互控件布局避让（`App.vue` / `DataToolbar.vue`）
+
+- `DataToolbar` 在 `≤720px` 移至**右上角**、按钮只留图标，避免与底部 dock 抢位。
+- 竖屏（`≤560px`）目标面板 / 指标卡上移（`bottom:168px` / `140px`），为更高的堆叠式 dock 让位。
+
+### 3. 球体（`sphere`）质量修复（`BarRace3D.vue`）
+
+- **尺寸映射改为幂次压缩（γ=0.68）**：旧版半径 ∝ ratio（线性）在悬殊数据下崩溃——
+  人口视图最大 11.41 万 vs 最小 0.41 万（28×），小球退化为 2~3px 噪点、大球独占半屏。
+  改为 `ratio^0.68` 后 28× 数值 → 半径差 ≈ 9.6×，大小差异清晰且小球仍有体积；
+  并加 `SPHERE_PX_MIN=9px` 像素下限兜底。
+- **新增「过渡层」**：同心四层叠加（外圈光晕 → 主体 → 0.78× 提亮过渡 → 0.40× 近白高光），
+  抹掉原先"主体/高光"之间的硬边，径向明暗连续，球体受光感更强。
+- **尺寸随相机距离补偿**：echarts-gl 的 `scatter3D.symbolSize` 是屏幕像素固定值、不随
+  相机远近缩放（实测 distance 607→160 时恒为 61.8px），导致全景拉远后球与地面透视脱节。
+  现按 `followDist / wideDist` 反比补偿，并乘一个全景放大档，保证收尾画面球群饱满醒目。
+- **构图修复**：球体内容矮（≈球径量级），沿用柱体"地面线在 85% 屏高"的构图会把球顶到
+  画面上部、下半留白。现按**可视高的固定比例**（`SPHERE_GAZE_K`）抬升注视点，球群在
+  任意数据量下都稳定落在画面中下部；竖屏按 aspect 归一系数，避免球群贴底。
+- **竖屏横向入画**：跨度距离改用**未 clamp 的真实 aspect** 计算，竖屏自动拉远，
+  首尾球不被裁切。
+
+### 4. 测试
+
+- `verify.mjs`：构图断言**按形状区分阈值**——球体全景高占比放宽到 ≥18%
+  （球体天然横向铺开、垂直占比低于柱体），柱体族仍为 ≥45%，避免把球体误判为回归。
+- 回归全绿：`npm test` 47/47、`node scripts/qa/verify.mjs` 35/35、
+  `node scripts/qa/interact.mjs` 7/7、`node scripts/qa/verify-playback.mjs` 无空白帧。
+
+---
+
+## v2.4.0 — 形状类型扩展（方柱/立方体/圆柱/圆角柱/球体）+ UI 与布局美化
+
+本轮为**功能增强 + 视觉优化**，不改变既有渲染行为（`bar` 形状仍为默认，出片结果向后兼容）。
+回归：单元测试 **47/47**、QA **35/35**、交互与播放回归全通过。
+
+### 1. 新增 5 种柱体形状（`config.js` / `BarRace3D.vue`）
+
+新增 `shape`（视图级）/ `defaultShape`（顶层默认）配置，取值：
+
+| 键名 | 呈现 | 渲染实现 |
+|---|---|---|
+| `bar` | 方柱（默认） | `bar3D`，`bevelSize≈0.28` 小倒角 |
+| `cube` | 立方体 | `bar3D`，直角正方形截面 |
+| `cylinder` | 圆柱 | `bar3D`，`bevelSize=1` 全圆角截面（近似圆柱） |
+| `rounded` | 圆角柱 / 胶囊 | `bar3D`，中等倒角 + 正方形截面 |
+| `sphere` | 球体 | `scatter3D`，用**球径**编码数值（独立 series 分支） |
+
+- 优先级：**视图 `shape` > 顶层 `defaultShape` > `bar`**；非法值回退 `bar` 并写入告警。
+- `normalizeShape()` 规范化（大小写不敏感、首尾空白裁剪）；`SHAPES` / `SHAPE_LABELS` 常量导出。
+- 形状切换时 `applyFrame` 检测到 `f.shape` 变化会**强制 `notMerge` 重建场景**（柱体与散点是两套 layout，不能增量合并）。
+- 球体走 `scatter3D`：读取每个数据点的 `symbolSize`（受 echarts-gl 约 200px 上限约束），
+  球心贴近底面；亮像素阈值单独放宽（球体天然少于柱体）。
+- URL 运行时可切换：`?shape=cylinder`；CLI 支持 `--shape <key>`（非法值直接报错退出）。
+
+### 2. 形状演示配置
+
+- `samples/departments.json`：q1=bar / q2=cylinder / q3=cube / q4=sphere，`defaultShape=bar`。
+- `samples/huining.json` + `src/data/huining.json`：area=cylinder / pop=bar / elev=rounded / red=sphere。
+- `samples/planets.json`：`defaultShape=sphere`，diameter/mass=sphere、orbit=rounded。
+- `scripts/data/fetch-huining.mjs` 同步生成带 `shape`/`defaultShape` 的配置。
+
+### 3. UI 与布局美化（设计令牌统一）
+
+- `src/App.vue`：建立 **CSS 设计令牌系统**（`:root` 定义 `--panel-bg`/`--radius-*`/`--space-*`/`--shadow-*`/`--z-*`/`--t-*`/`--ease` 等），层级与留白统一。
+- 响应式适配：`@media (max-width:1024px)` / `(max-width:720px)` / `(orientation:portrait)` 断点，竖屏与窄屏布局优化；支持 `prefers-reduced-motion`。
+- `MetricBar.vue`：**形状切换按钮组**（`v-for` 枚举 5 种形状）+ 令牌化样式 + 响应式 + `:focus-visible`/`:active` 微交互。
+- `DataToolbar.vue`：令牌化 + 响应式（≤720px 移至左下）。
+- `DataTable.vue`：令牌化 + 粘性表头 + 输入聚焦光晕 + `:focus-visible` + 响应式。
+
+### 4. 测试增强
+
+- `scripts/qa/config.test.mjs`：新增 15 项形状断言（`SHAPES` 内容、`normalizeShape` 边界、缺省继承、视图覆盖顶层、非法回退 + 告警）→ **47/47**。
+- `scripts/qa/verify.mjs`：新增 6 项形状渲染断言（5 种形状各渲染一帧非空白 + 连续切换无未捕获异常）→ **35/35**。
+
+### 5. 文档
+
+- `README.md`：配置 Schema 增补 `shape`/`defaultShape`；新增「形状类型」表与球体语义说明；CLI 参数表增补 `--shape`；URL 契约增补 `shape=`。
+
+---
+
+## v2.3.2 — 工程质量修复（QA 脚本可移植性 / 依赖完整性 / CI）
+
+本轮为工程化修复，不改变渲染行为与出片结果（单元测试 32/32、QA 29/29、交互 7/7、
+播放无空白帧全部回归通过）。
+
+### 1. 修复 `pngjs` 未声明依赖（两个 QA 脚本必然崩溃）
+
+`scripts/qa/verify-playback.mjs` 与 `scripts/qa/diag-calib2.mjs` 均 `import { PNG } from 'pngjs'`，
+但 `package.json` 未声明该依赖 → 任何环境运行都会抛 `ERR_MODULE_NOT_FOUND`。
+**修复**：`devDependencies` 增加 `"pngjs": "^7.0.0"`。
+
+### 2. 修复 `verify.mjs` 硬编码的绝对路径
+
+产物目录此前被硬编码为某台机器的绝对路径（`/root/.codebuddy/artifact/<uuid>/qa`），
+换机/换用户必然写错位置或失败。
+**修复**：改为 `os.tmpdir()/bar-chart-reveal-qa`，并支持 `QA_ART` 环境变量覆盖。
+
+### 3. 修复 QA 脚本硬编码 `localhost:5173`（需手动起 dev server）
+
+`verify-playback.mjs` / `diag-calib2.mjs` 直接访问 `http://localhost:5173`，要求用户先手动
+`npm run dev`，且端口/主机不确定。
+**修复**：改为自动构建 `dist`（若缺失）→ 用 `capture-core` 的 `startServer` 自启静态服务
+→ 用返回的 `srv.base` 访问，跑完自动关闭。两脚本现已完全自包含。
+
+### 4. 仓库卫生
+
+- `.gitignore` 增加 `dist-single/`、`out/`；从版本库移除已提交的构建产物
+  `dist-single/index.html`（1.7MB）与 `dist-single/favicon.svg`。
+- 移除冗余的 `pnpm-lock.yaml`，统一使用 `package-lock.json`（脚本/CI 均基于 npm）。
+
+### 5. 新增 GitHub Actions CI（`.github/workflows/ci.yml`）
+
+- `unit` 作业：`npm ci` → `npm test` → `npm run build` → `npm run build:single`，上传 `dist` 产物。
+- `qa` 作业：安装 chromium / xvfb / `fonts-noto-cjk` → 运行 `interact.mjs` 与 `verify.mjs`。
+
+### 6. 其他
+
+- `package.json` 增加 `engines.node >= 18`，及 `qa:playback` / `qa:all` 脚本。
+- README「质量保障」章节更新为六套脚本的正确用法与自包含说明。
+
+---
+
 ## v2.3.1 — 28 项数据集标签覆盖修复（人口/红色视图只有 4 个标签）
 
 针对用户录屏反馈修复：**海拔（7 项）、面积（14 项）视图标签齐全，但人口、红色

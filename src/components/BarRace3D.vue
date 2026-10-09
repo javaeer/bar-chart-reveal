@@ -20,6 +20,7 @@ const props = defineProps({
   reveal: { type: Number, default: 0.72 },
   duration: { type: Number, default: 7200 }, // ms
   captureT: { type: Number, default: null }, // 非 null：确定性单帧（截图模式）
+  shape: { type: String, default: 'bar' },   // bar|cube|rounded|cylinder|sphere
 });
 const emit = defineEmits(['active', 'done']);
 
@@ -94,6 +95,60 @@ const LABEL_MAX_ALL = 16;
 // 像素 ≈ 356px ≫ 标签宽 ~120px，窗口全显不会重叠。仅跟随期(t ≤ reveal)生效。
 const FOLLOW_LABEL_WIN = 4;
 
+// ================= 形状（shape）=================
+// 形状参数表：bar3D 家族靠 bevelSize（归一化倒角比例）与截面宽深比区分。
+//   · bevelSize 语义（echarts-gl Bars3DGeometry）：实际倒角半径 = min(宽,深)/2 × bevelSize，
+//     故 =1 时截面被完全圆化 → 近似圆柱。
+//   · bevelSmoothness 为倒角环向分段数，越大越光滑但顶点数按 (seg+1)^4 增长——
+//     cylinder 用 8（够圆、顶点可控），避免无头 swiftshader 出片显著变慢。
+// sphere 不走此表：改用 scatter3D（圆符号），球径编码数值，见 buildOption 分支。
+const SHAPE_GEOM = {
+  bar:      { bevel: 0.28, smooth: 3,  square: false }, // 现状：轻微圆角
+  cube:     { bevel: 0.0,  smooth: 0,  square: true  }, // 直角方柱
+  rounded:  { bevel: 0.50, smooth: 6,  square: true  }, // 圆角柱
+  cylinder: { bevel: 1.0,  smooth: 8,  square: true  }, // 截面完全圆化 → 近圆柱
+};
+const shapeGeom = (s) => SHAPE_GEOM[s] || SHAPE_GEOM.bar;
+const isSphere = (s) => s === 'sphere';
+
+// 球体几何（scatter3D 分支，三层叠加：atmosphere 光晕 / body 主体 / specular 高光）：
+//   · 球心离地 = 半径（贴地），随生长从 0 抬升到半径，视觉上"弹跳升起"；
+//   · 半径 ∝ 球体专属高度系数 sphereFrac（下限比柱体 H_FLOOR 更低，让大小差异更易读）；
+//   · symbolSize 为屏幕像素直径，故需把世界半径换算成像素（按跟随期可视高估）。
+// 注：echarts-gl PointsBuilder 对 symbolSize 有 ~200px 上限，故 clamp 到 188。
+// 【立体感】scatter3D 是"永远正对相机的贴片"（billboard sprite），本身无光照/高光，
+//   纯色圆看起来像扁圆点。故用**多层同位置叠加**伪造球体：
+//     ① atmosphere 外层光晕（大一圈、低透明）→ 边缘辉光；
+//     ② body 主体球 → 球体本色；
+//     ③ specular 高光（小一圈、偏左上、近白色）→ 受光高光的错觉。
+// 【尺寸映射：幂次压缩（γ=0.68），兼顾"差异可读"与"不退化"】
+//   纯线性半径在悬殊数据下会崩：pop 视图最大 11.41 万 vs 最小 0.41 万（28×），
+//   小球直接退化成 2~3px 小点、大球独占半屏（用户报"球体不够完美"）。
+//   纯 sqrt（面积编码）又走向另一极端：28× → 半径仅 5.3×，28 个球看起来"差不多大"，
+//   对比语义丢失（实测截图确认）。故取中间幂次 γ=0.68：
+//     28× 数值 → 半径差 ≈ 28^0.68 ≈ 9.6×，大球醒目、小球仍是有体积的球，
+//     且保持单调（排序/颜色/数值语义不变）。
+const SPHERE_GAMMA = 0.68;   // 半径映射幂次（1=线性，0.5=面积）
+const SPHERE_R_MIN = 0.30;   // 最小球世界半径（γ 压缩后下限，仍明显成"球"）
+const SPHERE_R_MAX = 1.05;   // 最大球世界半径（受步距约束：S×BAR_W_MAX/2）
+const SPHERE_PX_MAX = 188;   // symbolSize 像素上限（< PointsBuilder 的 200 上限）
+const SPHERE_H_FLOOR = 0.26; // 半径系数下限（γ 压缩后 0.41/11.41 → 0.26+0.74×0.19≈0.40）
+const SPHERE_ATMO_K = 1.30;  // 环境光晕层直径倍率（相对主体，略大一圈 → 边缘辉光）
+const SPHERE_MID_K = 0.78;   // 中间过渡层倍率（本色略亮 → 球面明暗过渡，避免"同心圆硬边"）
+const SPHERE_CORE_K = 0.40;  // 内芯高光层倍率（同中心、近白更小 → 受光感的核心）
+const SPHERE_PX_MIN = 9;     // symbolSize 像素下限：极端数据下小球也不小于 9px（可点选/可辨识）
+// 全景期球体像素放大系数：距离补偿（followDist/wideDist）会把全景球压得很小，
+// 而球体是**画面主体**（不像柱体还有高度可言），必须保证收尾画面里球群依然饱满醒目。
+// 实测：n=28 时 wideDist=607，补偿后最大球仅 ~39px（1280×720），观感是"一排细珠"。
+// 取 4.2 后最大球 ~88px、最小 ~30px，大小差异清晰且球体圆润可辨。
+const WIDE_SPHERE_BOOST = 4.2;
+// 全景期最大球直径目标占画面高的比例——球体模式据此反推相机距离（见 wideDist 处注释）。
+// 0.20 ≈ 720p 下最大球直径 ~144px，大小差异清晰可读、又不会挤占整个画面。
+const SPHERE_WIDE_FILL = 0.20;
+// 球体注视点抬升系数（× 可视高）：把球群从"画面偏上"推到"中下部"（见 cyWide 处注释）。
+// 实测（1280×720）：0.30 时 n=28/n=14 球群分别稳定落在 ~57%/~58% 屏高。
+const SPHERE_GAZE_K = 0.30;
+
 // —— 标签字体（单一真源）——
 // 中文字体必须显式声明：无头环境下 font-family 若解析到不含中文字形的字体，
 // canvas measureText 会把每个汉字当作超宽字符 → 标签"逐字换行/竖排"。
@@ -104,6 +159,12 @@ const LABEL_FONT_SIZE = 16;
 const LABEL_MEASURE_FONT = `bold ${LABEL_FONT_SIZE}px ${LABEL_FONT_FAMILY}`;
 
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+// 把颜色朝白色混合 amt（0~1）—— 用于球体"过渡层"提亮，制造径向明暗梯度的中间档。
+// theme.js 的色值统一为 [r,g,b]（0~255）数组，故直接按分量线性插值。
+const mixWhite = (c, amt) => {
+  const a = Array.isArray(c) ? c : [200, 200, 200];
+  return [a[0], a[1], a[2]].map((v) => Math.round(v + (255 - v) * amt));
+};
 const lerp = (a, b, t) => a + (b - a) * t;
 const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 // 轻微回弹，让柱子"弹"出来（f(0)=0，峰值 ~1.1）
@@ -167,7 +228,13 @@ function computeFrame(tRaw) {
   // —— ② boxH：先定"最高柱世界高度"= 可视高 × CORE_FILL（保证整体入画、构图居中）——
   //  这是唯一由画面决定的量；柱宽则由"最矮柱非薄片"反推（见③）。
   const worldMaxH = visH * CORE_FILL;
-  const boxH = worldMaxH * ZMAX;
+  // 球体模式：内容高度只有"球直径"量级（≈ 2×世界半径），若沿用柱体的高大 z 预算，
+  // 3D 网格会被撑得很高而球全挤在底部 → 画面下半空、球偏小。
+  // 故球体模式单独收窄 z 预算：按最大球直径留出约 2.4 倍余量（含标签/间隙）。
+  const shape0 = isSphere(props.shape) ? 'sphere' : props.shape;
+  const sphereWorldMaxR0 = Math.min(SPHERE_R_MAX, S * BAR_W_MAX * 0.5);
+  const worldMaxHSphere = sphereWorldMaxR0 * 2 * 2.4;
+  const boxH = (isSphere(props.shape) ? Math.min(worldMaxH, worldMaxHSphere) : worldMaxH) * ZMAX;
 
   // —— ③ 柱宽：满足两约束，取较小者 ——
   //   (a) 世界柱宽 ≤ 最矮柱高 / MIN_HW   → 最矮柱不减薄片
@@ -181,15 +248,38 @@ function computeFrame(tRaw) {
   );
   const barDworld = barWworld * (BAR_D / BAR_W_BASE);
 
-  // —— ④ 全景距离：整排跨度反推（结尾拉远，全部柱体入画）——
-  const barsSpan = barWworld * GLOW_K + span * S; // 首尾柱外缘跨度（世界）
-  const wideDist = Math.max(barsSpan / (WIDE_VIS * visFactor), followDist * 1.2);
+  // —— 球体模式：球径世界单位（贴地、随 hFrac 缩放），供 scatter3D 使用 ——
+  const shape = shape0;
+  const sphereWorldMaxR = sphereWorldMaxR0;
+  const sphereWorldMinR = SPHERE_R_MIN;
+  // 世界半径 → 屏幕像素直径换算（跟随期可视高：visH 世界单位 ↔ el 像素高）
+  const pxPerWorldY = (elv && elv.clientHeight ? elv.clientHeight : 720) / visH;
+
+  // —— ④ 全景距离：整排跨度反推（结尾拉远，全部柱体/球体入画）——
+  // 球体比柱体宽，跨度按球径算，避免全景期球体出画。
+  // 【竖屏用真实 aspect】visFactor 基于 clamp 后的 aspectC(≥1.15)，竖屏(真实 0.75)会被
+  //   当成 1.15 → 可视宽被高估 → 距离偏小 → 整排横向溢出被裁。故按未 clamp 的真实
+  //   aspect 再算一遍跨度距离并取较大者（宽屏两者等价，竖屏自动拉远，首尾入画）。
+  const halfWidthWorld = isSphere(props.shape) ? sphereWorldMaxR * 1.25 : barWworld * GLOW_K * 0.5;
+  const barsSpan = halfWidthWorld * 2 + span * S; // 首尾外缘跨度（世界）
+  const visFactorTrue = 2 * Math.tan((FOV / 2) * Math.PI / 180) * Math.max(aspect, 0.4);
+  const wideDistNode = isSphere(props.shape) ? barsSpan / (WIDE_VIS * visFactorTrue) : barsSpan / (WIDE_VIS * visFactor);
+  const wideDist = Math.max(wideDistNode, followDist * 1.2);
+
+  // —— 球体尺寸的"距离补偿" ——
+  // 【为什么需要】echarts-gl 的 scatter3D symbolSize 是**屏幕像素固定值**，相机拉远/拉近
+  //   时它不随之缩放（实测：distance 607→160，symbolSize 恒为 61.8px），因此全景期
+  //   相机远退时地面网格在屏幕上缩小、而球体仍保持跟随期的像素尺寸 → 球群与地面
+  //   透视比例脱节、球小得看不清。补偿：symbolSize 按 distance 反比缩放，再乘一个
+  //   放大档（球体是画面主体，需要足够醒目）。
+  const sphereDistScale = isSphere(props.shape) ? clamp(followDist / wideDist, 0.34, 1) : 1;
+  const spherePxScale = sphereDistScale * WIDE_SPHERE_BOOST;
 
   const barW = barWworld;
   const barD = barDworld;
 
   if (!n) {
-    return { bars: [], camera: { alpha: 20, beta: 6, distance: wideDist, center: [0, S, 0], fov: FOV }, activeIdx: -1, revealed: 0, theme: th, boxW, boxD, boxH, barW, barD, xPad };
+    return { bars: [], camera: { alpha: 20, beta: 6, distance: wideDist, center: [0, S, 0], fov: FOV }, activeIdx: -1, revealed: 0, theme: th, boxW, boxD, boxH, barW, barD, xPad, shape, sphereWorldMinR, sphereWorldMaxR, pxPerWorldY };
   }
 
   // —— 升序（低→高）弹出次序；稳定排序 ——
@@ -219,10 +309,24 @@ function computeFrame(tRaw) {
     const z = Math.max(hFrac * local, 0.0001);
     const x = -span / 2 + k; // 世界坐标（场景单位），与相机中心同一坐标系
     const color = rows[rowIdx].highlight ? th.highlight : rampColorAt(th.ramp, ratio);
+    // —— 球体专属几何 ——
+    //   半径系数走 **ratio^SPHERE_GAMMA**：幂次压缩映射，详见 SPHERE_GAMMA 处注释。
+    //   半径 ∝ sphereFrac（世界单位）→ 再换算成 symbolSize 像素直径；
+    //   球心贴地：y = 半径 × local（生长时从地面弹出到目标半径高度）。
+    const sphereFrac = SPHERE_H_FLOOR + (1 - SPHERE_H_FLOOR) * Math.pow(ratio, SPHERE_GAMMA);
+    const sphereRworld = sphereWorldMinR + (sphereWorldMaxR - sphereWorldMinR) * sphereFrac;
+    const sphereR = sphereRworld * local;                 // 生长中的当前半径
+    const sphereY = sphereR;                              // 球心离地 = 半径（贴地）
+    const symbolSize = clamp(sphereRworld * 2 * pxPerWorldY * spherePxScale * local, 0, SPHERE_PX_MAX);
+    // 像素下限：极端悬殊数据下最小球仍 ≥ SPHERE_PX_MIN（否则退化为噪点）。仅对已出现(local>0)生效。
+    const symbolSizeFinal = local > 0.001 ? Math.max(symbolSize, SPHERE_PX_MIN * spherePxScale) : symbolSize;
     bars.push({
       name: rows[rowIdx].name,
       worldX: x,
       value: [x, 0, z],
+      sphereValue: [x, 0, sphereY], // scatter3D 坐标：[x, 深度(0), 高度] —— 高度同样落在 zAxis3D，与 bar3D 同轴
+      sphereR,
+      symbolSize: symbolSizeFinal,
       real: v,
       ratio,
       hFrac,
@@ -343,8 +447,21 @@ function computeFrame(tRaw) {
   const worldH = boxH / ZMAX;
   const CY_GROUND = -1.2;   // 跟随期注视点：地面线下方一点（实测标定值）
   const K_GAZE_WIDE = 0.62; // 全景期注视点系数
-  const cyFollow = CY_GROUND;
-  const cyWide = worldH * K_GAZE_WIDE;
+  // 球体内容矮（≈ 最大球直径），沿用"地面线在 85% 屏高"的长柱构图会把球顶到画面上部、
+  // 下半留白。球体模式改把注视点抬到球群上方，使球群落在画面中下部（~58% 屏高）：
+  //   · 球群世界中心 ≈ sphereWorldMaxR（球心离地=半径，最大球直径竖向中心即半径处）；
+  //   · 但相机注视点抬升量须随**可视高**（visHWide）换算——n 大时相机远、可视高很大，
+  //     固定世界增量根本无法把球群推下来（实测 n=28 时 cy 需 ≈26 才居中，而 n=14 只需 ≈10）。
+  //   · 故：cy = 球群中心 + 可视高的一个固定比例（SPHERE_GAZE_K），对任意 n 自动适配。
+  //     实测（1280×720）：SPHERE_GAZE_K=0.30 时 n=28/n=14 球群分别稳定落在 ~57%/~58% 屏高。
+  const visHWide = 2 * wideDist * Math.tan((FOV / 2) * Math.PI / 180);
+  const sphereContentMid = sphereWorldMaxR;
+  // 【竖屏收窄 gaze】竖屏 aspect 小 → wideDist 大 → visHWide 大，同一系数会把球群推得过低
+  //   （实测 900×1200 球群贴底）。故系数按 aspect 归一：宽屏用 SPHERE_GAZE_K，竖屏等比减小
+  //   （用真实 aspect 与基准 1.78 的比值，clamp 到 [0.35,1]），保持"球群略低于画面中线"。
+  const gazeK = SPHERE_GAZE_K * clamp(aspect / 1.78, 0.35, 1);
+  const cyFollow = isSphere(props.shape) ? sphereContentMid + visH * gazeK : CY_GROUND;
+  const cyWide = isSphere(props.shape) ? sphereContentMid + visHWide * gazeK : worldH * K_GAZE_WIDE;
 
   // 俯仰：跟随期近平视（柱体立面完整、棱线竖直）；全景期略俯视（顶面进深感）。
   const alphaFollow = ALPHA_FOLLOW;
@@ -383,6 +500,7 @@ function computeFrame(tRaw) {
     revealed,
     theme: th,
     boxW, boxD, boxH, barW, barD, xPad,
+    shape, sphereWorldMinR, sphereWorldMaxR, pxPerWorldY,
   };
 }
 
@@ -395,6 +513,7 @@ function computeFrame(tRaw) {
 // 若此刻 attach 会因 getCanvas()===null 静默失败（曾导致监听完全没生效）。
 // 真正的挂载放在 ensureContextWatchers()，在每次成功 setOption 后调用。
 let sceneBuilt = false; // 当前 chart 实例是否已完成全量(notMerge)构建
+let lastBuiltShape = null; // 上次构建所用的形状（变化时需强制全量重建，见 applyFrame）
 function initChart() {
   if (!el.value) return;
   if (chart) {
@@ -402,6 +521,7 @@ function initChart() {
     chart = null;
   }
   sceneBuilt = false; // 新实例必须重新全量构建
+  lastBuiltShape = null;
   chart = echarts.init(el.value, null, { renderer: 'canvas' });
   return chart;
 }
@@ -439,67 +559,145 @@ function buildOption(f) {
     splitArea: { show: false },
   };
   const span = Math.max(f.bars.length - 1, 0);
+  const geom = shapeGeom(f.shape);
+  const sphere = isSphere(f.shape);
 
-  const mkBar = (b) => {
+  // —— 逐项 data 构造（bar3D / scatter3D 共用）——
+  // merge 逐帧更新时，上一帧 item 的 label 不会自动清除，必须**每帧显式**
+  // 声明 show 与内容，否则"上一帧有标签、这一帧不该有"的柱子会残留旧标签。
+  // 常量字符串 formatter：echarts-gl 只认常量配置（函数式会被静默忽略，
+  // 且空文本会中断整个标签循环）——逐项开关 show 即可，安全且无重叠。
+  // 注：scatter3D 的 label 走同一 LabelsBuilder，限制一致。
+  const mkItem = (b) => {
     const it = {
       name: b.name,
-      value: b.value,
+      value: sphere ? b.sphereValue : b.value,
       itemStyle: { color: rgbStr(b.color), opacity: 1 },
+      label: b.showLabel ? { show: true, formatter: b.labelText } : { show: false },
     };
-    // merge 逐帧更新时，上一帧 item 的 label 不会自动清除，必须**每帧显式**
-    // 声明 show 与内容，否则"上一帧有标签、这一帧不该有"的柱子会残留旧标签。
-    // 常量字符串 formatter：echarts-gl 只认常量配置（函数式会被静默忽略，
-    // 且空文本会中断整个标签循环）——逐项开关 show 即可，安全且无重叠。
-    it.label = b.showLabel
-      ? { show: true, formatter: b.labelText }
-      : { show: false };
+    if (sphere) it.symbolSize = b.symbolSize; // scatter3D：逐项像素直径
     return it;
   };
 
-  const base = { type: 'bar3D', shading: 'lambert', bevelSize: 0.28, bevelSmoothness: 3 };
-
-  // 光晕层：略大 + 半透明同色，轻微霓虹辉光
-  const glow = {
-    ...base,
-    name: 'glow',
-    barSize: [f.barW * GLOW_K, f.barD * GLOW_K],
-    silent: true,
-    label: { show: false },
-    data: f.bars.filter((b) => b.shown).map((b) => ({
-      value: b.value,
-      itemStyle: { color: rgbStr(b.color), opacity: 0.2 },
-    })),
-  };
-
-  // 主体层：系列级 label 常量样式（默认关闭，逐项开启）
-  const main = {
-    ...base,
-    name: 'main',
-    barSize: [f.barW, f.barD],
-    data: f.bars.filter((b) => b.shown).map(mkBar),
-    label: {
-      show: false,
-      position: 'top',
-      distance: 0.6,
-      textStyle: {
-        color: th.labelColor,
-        fontSize: LABEL_FONT_SIZE,
-        fontWeight: 700,
-        lineHeight: 20,
-        // 与 index.html @font-face / LABEL_MEASURE_FONT 同一字体栈，保证测量与实际渲染一致
-        fontFamily: LABEL_FONT_FAMILY,
-        textBorderColor: th.labelBg,
-        textBorderWidth: 3,
-        backgroundColor: th.labelBg,
-        borderColor: th.labelBorder,
-        borderWidth: 1,
-        borderRadius: 3,
-        padding: [4, 8],
-      },
+  // —— 系列：按形状选择 bar3D 家族 或 scatter3D 家族（球体为多层叠加） ——
+  // 两者可共存于同一 grid3D；此处二选一渲染。
+  let glowSeries, mainSeries, midSeries, specSeries = null;
+  const labelStyle = {
+    show: false,
+    position: 'top',
+    distance: sphere ? 6 : 0.6, // scatter3D 的 label distance 为像素量级
+    textStyle: {
+      color: th.labelColor,
+      fontSize: LABEL_FONT_SIZE,
+      fontWeight: 700,
+      lineHeight: 20,
+      // 与 index.html @font-face / LABEL_MEASURE_FONT 同一字体栈，保证测量与实际渲染一致
+      fontFamily: LABEL_FONT_FAMILY,
+      textBorderColor: th.labelBg,
+      textBorderWidth: 3,
+      backgroundColor: th.labelBg,
+      borderColor: th.labelBorder,
+      borderWidth: 1,
+      borderRadius: 3,
+      padding: [4, 8],
     },
-    emphasis: { itemStyle: { opacity: 1 } },
-    itemStyle: { opacity: 1 },
   };
+
+  if (sphere) {
+    // —— 球体：scatter3D 四层同心叠加（伪立体）——
+    // scatter3D 的符号是恒正对相机的贴片，无光照 → 单层只是扁圆点。四层同中心叠加，
+    // 形成"外圈暗辉光 → 本色球体 → 略亮过渡 → 中心近白高光"的径向明暗梯度：
+    //   ① glow  环境光晕：大一圈、低透明、同色（lighter）→ 边缘"透光"辉光；
+    //   ② main  主体球：本色实心 → 球体本体（提供清晰边界）；
+    //   ③ mid   过渡层  ：0.78×、本色微提亮 → 抹掉 main/spec 之间的硬边，让明暗连续；
+    //   ④ spec  高光芯  ：0.40×、近白 → 受光高光，是"球体感"的视觉核心。
+    // 生长动画：各层 symbolSize 同步由 0→目标（见 computeFrame 的 local 因子）。
+    // 【为什么不用偏移高光】perspective + billboard 贴片下，靠世界坐标偏移把高光放到
+    //   球面特定位置极不稳定（X 步距=1.0 世界单位、球半径≈1.0，偏移稍大就飞出球外，
+    //   实测出现"灰点悬浮在球上方"）。改走"同心明暗"——几何与球体完全锁定，
+    //   任何视角/缩放都稳，明暗过渡天然模拟球面受光。
+    const shownBars = f.bars.filter((b) => b.shown);
+    const sz = (b, k) => Math.max(b.symbolSize * k, 2);
+    glowSeries = {
+      type: 'scatter3D',
+      name: 'glow',
+      symbol: 'circle',
+      silent: true,
+      label: { show: false },
+      blendMode: 'lighter', // 叠加发光
+      itemStyle: { opacity: 0.16 },
+      data: shownBars.map((b) => ({
+        value: b.sphereValue,
+        symbolSize: Math.min(b.symbolSize * SPHERE_ATMO_K, SPHERE_PX_MAX + 20),
+        itemStyle: { color: rgbStr(b.color), opacity: 0.16 },
+      })),
+    };
+    mainSeries = {
+      type: 'scatter3D',
+      name: 'main',
+      symbol: 'circle',
+      data: shownBars.map(mkItem),
+      label: labelStyle,
+      itemStyle: { opacity: 1 },
+      emphasis: { itemStyle: { opacity: 1 } },
+    };
+    midSeries = {
+      type: 'scatter3D',
+      name: 'mid',
+      symbol: 'circle',
+      silent: true,
+      label: { show: false },
+      blendMode: 'lighter',
+      data: shownBars.map((b) => ({
+        value: b.sphereValue, // 与主体同心同高
+        symbolSize: sz(b, SPHERE_MID_K),
+        itemStyle: { color: rgbStr(mixWhite(b.color, 0.22)), opacity: 0.34 },
+      })),
+    };
+    specSeries = {
+      type: 'scatter3D',
+      name: 'spec',
+      symbol: 'circle',
+      silent: true,
+      label: { show: false },
+      blendMode: 'lighter',
+      data: shownBars.map((b) => ({
+        value: b.sphereValue, // 与主体同心同高
+        symbolSize: sz(b, SPHERE_CORE_K),
+        itemStyle: { color: '#f2ffff', opacity: 0.42 },
+      })),
+    };
+  } else {
+    // —— 柱体家族：bar3D（bevel/截面按形状参数化） ——
+    const base = {
+      type: 'bar3D',
+      shading: 'lambert',
+      bevelSize: geom.bevel,
+      bevelSmoothness: geom.smooth,
+    };
+    // cube/cylinder 用正方形截面（宽=深），圆润形状更协调
+    const barD = geom.square ? f.barW : f.barD;
+    glowSeries = {
+      ...base,
+      name: 'glow',
+      barSize: [f.barW * GLOW_K, barD * GLOW_K],
+      silent: true,
+      label: { show: false },
+      data: f.bars.filter((b) => b.shown).map((b) => ({
+        value: b.value,
+        itemStyle: { color: rgbStr(b.color), opacity: 0.2 },
+      })),
+    };
+    mainSeries = {
+      ...base,
+      name: 'main',
+      barSize: [f.barW, barD],
+      data: f.bars.filter((b) => b.shown).map(mkItem),
+      label: labelStyle,
+      emphasis: { itemStyle: { opacity: 1 } },
+      itemStyle: { opacity: 1 },
+    };
+  }
 
   return {
     animation: false,
@@ -529,7 +727,9 @@ function buildOption(f) {
     xAxis3D: { type: 'value', min: -span / 2 - f.xPad, max: span / 2 + f.xPad, ...axes },
     yAxis3D: { type: 'value', min: -0.85, max: 0.85, ...axes },
     zAxis3D: { type: 'value', min: 0, max: ZMAX, ...axes },
-    series: [glow, main],
+    series: specSeries
+      ? [glowSeries, mainSeries, midSeries, specSeries]
+      : [glowSeries, mainSeries],
   };
 }
 
@@ -541,6 +741,10 @@ function applyFrame(t) {
   if (isContextLost.value) return f;
   if (!chart) return f;
   const opt = buildOption(f);
+  // 【形状切换需全量重建】series 的 type 会随形状在 bar3D ↔ scatter3D 之间变化，
+  // merge 增量更新无法跨类型复用旧的 GL 网格（会残留/错位）。故形状变化时强制
+  // notMerge 重建一次，之后恢复逐帧 merge。
+  if (f.shape !== lastBuiltShape) sceneBuilt = false;
   // 【修复：播放期画布空白（"直到最后才显示所有柱子"）】
   // 旧实现每帧 setOption(opt, { notMerge: true })——notMerge 会把上一次的
   // echarts-gl 场景（grid3D + bar3D 网格 + GL 资源）整体销毁重建。实测单次
@@ -551,6 +755,7 @@ function applyFrame(t) {
   // merge 增量更新（series data + viewControl），GL 网格原地更新。
   chart.setOption(opt, { notMerge: !sceneBuilt });
   sceneBuilt = true;
+  lastBuiltShape = f.shape;
   // setOption 之后 ECharts 的 <canvas> 才真正存在 —— 此刻再确保监听已挂载。
   ensureContextWatchers();
   // echarts-gl 不消费 viewControl.fov（见函数注释），setOption 后直写长焦 FOV。
@@ -563,9 +768,10 @@ function applyFrame(t) {
       t,
       revealed: f.revealed,
       n: f.bars.length,
+      shape: f.shape,
       activeIdx: f.activeIdx,
       camera: { alpha: f.camera.alpha, beta: f.camera.beta, distance: +f.camera.distance.toFixed(2), center: f.camera.center.map((v) => +v.toFixed(2)) },
-      bars: f.bars.map((b) => ({ x: +(b.value[0]).toFixed(2), z: +(b.value[2]).toFixed(3), ratio: +b.ratio.toFixed(3), shown: b.shown, rank: b.rank })),
+      bars: f.bars.map((b) => ({ x: +(b.value[0]).toFixed(2), z: +(b.value[2]).toFixed(3), ratio: +b.ratio.toFixed(3), shown: b.shown, rank: b.rank, symbolSize: b.symbolSize != null ? +b.symbolSize.toFixed(1) : undefined })),
       // 标签诊断：字体是否就绪 + 每个标签的实测像素宽（供 label_overflow 检测）
       labelFontReady: isLabelFontReady(),
       applyCost: +lastApplyCost.toFixed(2),
@@ -740,7 +946,7 @@ onBeforeUnmount(() => {
 });
 
 watch(() => props.captureT, () => render());
-watch(() => [props.items, props.theme, props.unit, props.fixed, props.reveal, props.duration], () => render(), { deep: true });
+watch(() => [props.items, props.theme, props.unit, props.fixed, props.reveal, props.duration, props.shape], () => render(), { deep: true });
 
 defineExpose({
   replay: play, render, computeFrame, beginRecord, renderAt, endRecord, getCanvas,

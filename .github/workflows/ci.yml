@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  # 快速通道：零依赖纯逻辑单元测试 + 构建（不需要浏览器 / GL）
+  unit:
+    name: 单元测试与构建
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: 纯逻辑单元测试（配置规范化 / 数据健壮性）
+        run: npm test
+      - name: 生产构建
+        run: npm run build
+      - name: 单文件构建（离线可打开）
+        run: npm run build:single
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+          retention-days: 7
+
+  # 重通道：需要 chromium + Xvfb 的视觉 / 交互 QA
+  qa:
+    name: 视觉与交互 QA
+    runs-on: ubuntu-latest
+    needs: unit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: 安装 chromium / xvfb / 中文字体
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser xvfb fonts-noto-cjk x11-utils
+      - name: 生产构建
+        run: npm run build
+      - name: 交互回归
+        env:
+          CHROMIUM_PATH: /usr/bin/chromium-browser
+        run: node scripts/qa/interact.mjs
+      - name: 构图 / 确定性 / 标签硬指标
+        env:
+          CHROMIUM_PATH: /usr/bin/chromium-browser
+        run: node scripts/qa/verify.mjs

@@ -1,6 +1,6 @@
 // 配置驱动的全局状态（Vue3 响应式）—— 支撑"多视图 / 多主题 / 任意数据集"的通用工具形态
 import { reactive, ref, computed } from 'vue';
-import { DEFAULT_CONFIG, normalizeConfig } from '../core/config.js';
+import { DEFAULT_CONFIG, normalizeConfig, SHAPES } from '../core/config.js';
 import { THEMES, getTheme } from '../theme.js';
 import { parseItemsCSV, toItemsCSV, downloadText } from '../utils/csv.js';
 
@@ -12,12 +12,16 @@ const state = reactive({
   config: initialConfig(),
   viewKey: '',
   themeKey: 'tech',
+  shapeKey: 'bar',
 });
 
 function syncKeysFromConfig() {
   const cfg = state.config;
   state.viewKey = cfg.views[0] ? cfg.views[0].key : '';
   state.themeKey = typeof cfg.theme === 'string' ? cfg.theme : (cfg.theme && cfg.theme.key) || 'tech';
+  // 形状：取当前视图的 shape（无则回退顶层 defaultShape / bar）
+  const v = cfg.views.find((x) => x.key === state.viewKey) || cfg.views[0];
+  state.shapeKey = (v && v.shape) || cfg.defaultShape || 'bar';
 }
 syncKeysFromConfig();
 
@@ -38,10 +42,18 @@ const themeList = computed(() => Object.values(THEMES));
 const theme = computed(() => getTheme(state.themeKey || state.config.theme));
 
 function setView(key) {
-  if (state.config.views.some((v) => v.key === key)) state.viewKey = key;
+  if (state.config.views.some((v) => v.key === key)) {
+    state.viewKey = key;
+    // 视图自带的 shape 优先；无则保留当前形状（用户手动切换不被重置）
+    const v = state.config.views.find((x) => x.key === key);
+    if (v && v.shape) state.shapeKey = v.shape;
+  }
 }
 function setTheme(key) {
   if (THEMES[key]) state.themeKey = key;
+}
+function setShape(key) {
+  if (SHAPES.includes(key)) state.shapeKey = key;
 }
 
 // 用外部配置对象整体替换状态（浏览器 URL ?cfg= / 内置示例 / 文件导入）
@@ -101,6 +113,7 @@ export function useDataset() {
     theme,
     setView,
     setTheme,
+    setShape,
     loadConfigObject,
     applyItems,
     importCSV,

@@ -110,13 +110,14 @@ function build() {
     title: '会宁县乡镇数据 · 3D 对比',
     subtitle: '数据来源：会宁县人民政府官网乡镇概况 · 第七次全国人口普查 · 2025 会宁县统计公报',
     theme: 'tech',
+    defaultShape: 'bar',
     revealRatio: 0.72,
     durationMs: 9000,
     views: [
-      { key: 'area', label: '行政区域面积', short: '面积', unit: 'km²', fixed: 0, items: pick('area', 0) },
-      { key: 'pop', label: '常住人口', short: '人口', unit: '万人', fixed: 2, items: pick('pop', 2) },
-      { key: 'elev', label: '平均海拔', short: '海拔', unit: 'm', fixed: 0, items: pick('elev', 0) },
-      { key: 'red', label: '红色资源指数', short: '红色', unit: '', fixed: 0, items: items.map((t) => ({ name: t.name, value: t.red, highlight: t.name === '会师镇' })) },
+      { key: 'area', label: '行政区域面积', short: '面积', shape: 'cylinder', unit: 'km²', fixed: 0, items: pick('area', 0) },
+      { key: 'pop', label: '常住人口', short: '人口', shape: 'bar', unit: '万人', fixed: 2, items: pick('pop', 2) },
+      { key: 'elev', label: '平均海拔', short: '海拔', shape: 'rounded', unit: 'm', fixed: 0, items: pick('elev', 0) },
+      { key: 'red', label: '红色资源指数', short: '红色', shape: 'sphere', unit: '', fixed: 0, items: items.map((t) => ({ name: t.name, value: t.red, highlight: t.name === '会师镇' })) },
     ],
   };
 }

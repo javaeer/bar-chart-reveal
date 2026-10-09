@@ -2,6 +2,7 @@
   "title": "太阳系行星 · 基础参数对比",
   "subtitle": "近似值 · 用于演示工具通用性（数据取自公开科普资料，非精密测量值）",
   "theme": "sunset",
+  "defaultShape": "sphere",
   "highlightLabel": "地球",
   "revealRatio": 0.72,
   "durationMs": 7200,
@@ -9,52 +10,130 @@
     {
       "key": "diameter",
       "label": "赤道直径",
+      "shape": "sphere",
       "short": "直径",
       "unit": "km",
       "fixed": 0,
       "items": [
-        { "name": "水星", "value": 4879 },
-        { "name": "金星", "value": 12104 },
-        { "name": "地球", "value": 12742, "highlight": true },
-        { "name": "火星", "value": 6779 },
-        { "name": "木星", "value": 139820 },
-        { "name": "土星", "value": 116460 },
-        { "name": "天王星", "value": 50724 },
-        { "name": "海王星", "value": 49244 }
+        {
+          "name": "水星",
+          "value": 4879
+        },
+        {
+          "name": "金星",
+          "value": 12104
+        },
+        {
+          "name": "地球",
+          "value": 12742,
+          "highlight": true
+        },
+        {
+          "name": "火星",
+          "value": 6779
+        },
+        {
+          "name": "木星",
+          "value": 139820
+        },
+        {
+          "name": "土星",
+          "value": 116460
+        },
+        {
+          "name": "天王星",
+          "value": 50724
+        },
+        {
+          "name": "海王星",
+          "value": 49244
+        }
       ]
     },
     {
       "key": "mass",
       "label": "质量（地球=1）",
+      "shape": "sphere",
       "short": "质量",
       "unit": "×地球",
       "fixed": 2,
       "items": [
-        { "name": "水星", "value": 0.055 },
-        { "name": "金星", "value": 0.815 },
-        { "name": "地球", "value": 1.0, "highlight": true },
-        { "name": "火星", "value": 0.107 },
-        { "name": "木星", "value": 317.8 },
-        { "name": "土星", "value": 95.2 },
-        { "name": "天王星", "value": 14.5 },
-        { "name": "海王星", "value": 17.1 }
+        {
+          "name": "水星",
+          "value": 0.055
+        },
+        {
+          "name": "金星",
+          "value": 0.815
+        },
+        {
+          "name": "地球",
+          "value": 1.0,
+          "highlight": true
+        },
+        {
+          "name": "火星",
+          "value": 0.107
+        },
+        {
+          "name": "木星",
+          "value": 317.8
+        },
+        {
+          "name": "土星",
+          "value": 95.2
+        },
+        {
+          "name": "天王星",
+          "value": 14.5
+        },
+        {
+          "name": "海王星",
+          "value": 17.1
+        }
       ]
     },
     {
       "key": "orbit",
       "label": "公转周期",
+      "shape": "rounded",
       "short": "周期",
       "unit": "年",
       "fixed": 2,
       "items": [
-        { "name": "水星", "value": 0.24 },
-        { "name": "金星", "value": 0.62 },
-        { "name": "地球", "value": 1.0, "highlight": true },
-        { "name": "火星", "value": 1.88 },
-        { "name": "木星", "value": 11.86 },
-        { "name": "土星", "value": 29.46 },
-        { "name": "天王星", "value": 84.01 },
-        { "name": "海王星", "value": 164.8 }
+        {
+          "name": "水星",
+          "value": 0.24
+        },
+        {
+          "name": "金星",
+          "value": 0.62
+        },
+        {
+          "name": "地球",
+          "value": 1.0,
+          "highlight": true
+        },
+        {
+          "name": "火星",
+          "value": 1.88
+        },
+        {
+          "name": "木星",
+          "value": 11.86
+        },
+        {
+          "name": "土星",
+          "value": 29.46
+        },
+        {
+          "name": "天王星",
+          "value": 84.01
+        },
+        {
+          "name": "海王星",
+          "value": 164.8
+        }
       ]
     }
   ]
