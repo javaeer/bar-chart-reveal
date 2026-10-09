@@ -51,7 +51,7 @@ const b64 = encodeConfig(v2);
       );
     }
 
-    // —— ③ UI 截图（v2.6）：带控件的编辑态，展示流式 dock / 取景框 / 信息面板 ——
+    // —— ③ UI 截图（v2.7）：带控件的编辑态，展示右侧 dock / 画面内信息层 / 取景框 ——
     const browser = await puppeteer.launch({
       executablePath: resolveChromium(),
       headless: 'new',
@@ -66,14 +66,14 @@ const b64 = encodeConfig(v2);
       await page.setViewport({ width: 1600, height: 900, deviceScaleFactor: 1 });
       await page.goto(`${srv.base}/?view=population`, { waitUntil: 'load' });
       await new Promise((r) => setTimeout(r, 2600));
-      await page.screenshot({ path: path.join(OUT, 'v2.6-界面-16-9.png') });
-      console.log('  ✓', 'v2.6-界面-16-9.png');
+      await page.screenshot({ path: path.join(OUT, 'v2.7-界面-右侧dock.png') });
+      console.log('  ✓', 'v2.7-界面-右侧dock.png');
 
-      // 切到 9:16 后再截一张（展示取景框自适应）
+      // 切到 9:16 后再截一张（展示取景框自适应 + 底部 dock 降级）
       await page.goto(`${srv.base}/?view=population&aspect=9:16`, { waitUntil: 'load' });
       await new Promise((r) => setTimeout(r, 2600));
-      await page.screenshot({ path: path.join(OUT, 'v2.6-界面-9-16.png') });
-      console.log('  ✓', 'v2.6-界面-9-16.png');
+      await page.screenshot({ path: path.join(OUT, 'v2.7-界面-9-16.png') });
+      console.log('  ✓', 'v2.7-界面-9-16.png');
 
       // 信息面板（标题/来源/备注）
       await page.goto(`${srv.base}/?view=population`, { waitUntil: 'load' });

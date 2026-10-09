@@ -3,6 +3,7 @@
 // 无外部依赖，不需要浏览器 / 字体 / GL——直接以 Node 运行。
 import { normalizeConfig, truncateName, SHAPES, normalizeShape } from '../../src/core/config.js';
 import { looksLikeV2, adaptV2 } from '../../src/core/adapt.js';
+import { buildOverlayModel } from '../../src/core/overlay.js';
 import {
   ASPECTS, ASPECT_KEYS, DEFAULT_ASPECT, normalizeAspect, ratioOf, pixelSizeFor,
   deriveDuration, intervalFromDuration, DEFAULT_BAR_INTERVAL_MS, INTERVAL_MIN, INTERVAL_MAX,
@@ -542,6 +543,17 @@ ok('video：默认间隔为 2000ms', DEFAULT_BAR_INTERVAL_MS === 2000 && INTERVA
   ok('默认数据集：barIntervalMs 已定义', DEFAULT_CONFIG.barIntervalMs === 2000, String(DEFAULT_CONFIG.barIntervalMs));
   ok('默认数据集：总时长由间隔推导（28 项 × 2000 / 0.72）',
     DEFAULT_CONFIG.durationMs === Math.round(28 * 2000 / 0.72), String(DEFAULT_CONFIG.durationMs));
+}
+{
+  // v2.7.1 信息层：buildOverlayModel 的 portrait 口径 = 取景框 w/h < 1
+  // （App.vue 的 .viewport.portrait 类与 Canvas 录制层共用该口径，保证预览=出片）
+  const base = { config: { title: 'T' }, view: { label: 'L', unit: 'U', fixed: 0 }, active: null,
+    theme: { accent: '#35e8ff', ink: '#eaf9ff' } };
+  const land = buildOverlayModel({ ...base, size: { w: 1600, h: 900 }, portrait: false });
+  const port = buildOverlayModel({ ...base, size: { w: 456, h: 810 }, portrait: true });
+  ok('overlay：横构图模型 portrait=false 且含标题', land.portrait === false && land.title === 'T');
+  ok('overlay：竖构图模型 portrait=true 且 target=null（无活跃柱）', port.portrait === true && port.target === null);
+  ok('overlay：竖构图排版度量按取景框宽 clamp', port.m.title <= 30 && port.m.title >= 15, String(port.m.title));
 }
 
 console.log(`\n==== 单元测试汇总：${pass}/${pass + fail} 通过 ====`);

@@ -116,8 +116,10 @@ async function main() {
           return b ? b.classList.contains('active') : false;
         });
         const errPct = Math.abs(after.ratio - 0.5625) / 0.5625 * 100;
-        aspectOk = activeOk && errPct <= 2;
-        aspectDetail = `激活=${activeOk} ${after.w}×${after.h} 比例=${after.ratio.toFixed(4)}（原 ${before.toFixed(4)}，偏差 ${errPct.toFixed(2)}%）`;
+        // v2.7.1：.viewport.portrait 类必须随竖构图出现（信息层落位与录制同口径）
+        const portraitCls = await page.$eval('.viewport', (el) => el.classList.contains('portrait'));
+        aspectOk = activeOk && errPct <= 2 && portraitCls;
+        aspectDetail = `激活=${activeOk} ${after.w}×${after.h} 比例=${after.ratio.toFixed(4)}（原 ${before.toFixed(4)}，偏差 ${errPct.toFixed(2)}%）portrait类=${portraitCls}`;
       }
     }
     check('v2.6 画幅切换：按钮激活 + 取景框比例跟随', aspectOk, aspectDetail);

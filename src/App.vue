@@ -14,8 +14,16 @@
     <!-- ★ 取景框（viewport）：画幅比例的**单一事实源**。
          以--vp-w/--vp-h 给出内接矩形尺寸（由 aspectRatio 计算），
          3D 画布只铺满它 → BarRace3D 读到的 aspect 恒等于所选比例，
-         故"预览所见 = 导出所得"。出片模式（capture）下铺满整屏。 -->
-    <div class="viewport">
+         故"预览所见 = 导出所得"。出片模式（capture）下铺满整屏。
+
+         v2.7：标题 / 当前目标等信息**移入取景框内部**，成为画面的一部分
+         （导出视频同样带标题与目标卡片）。它们以 --vp-w/--vp-h 为坐标系
+         绝对定位，故任何画幅比例下都按比例落在画面内，不会溢出到框外。 -->
+    <!-- ★ portrait 类：由**取景框**宽高比驱动（JS 计算），而非窗口媒体查询。
+         与 paintOverlay 的 portrait 判定（size.w/size.h < 1）保持同一口径，
+         保证「编辑态所见 = 录制所得」—— 例如宽屏窗口里切 9:16 画幅时，
+         画面内目标卡/来源的落位必须与导出视频一致（v2.7.1 修复）。 -->
+    <div class="viewport" :class="{ portrait: vpPortrait }">
       <BarRace3D
         ref="chartRef"
         :items="activeView.items"
@@ -28,44 +36,60 @@
         :capture-t="captureT"
         @active="onActive"
       />
+
+      <!-- ★ 画面内信息层（overlay）：随取景框缩放，属于"视频内容"的一部分。
+           与 .stage-ui（屏幕级 UI，出片时隐藏）明确分层：
+             · .vp-overlay  → 进画面（导出可见）
+             · .stage-ui    → 屏幕 UI（编辑态辅助，出片隐藏） -->
+      <div class="vp-overlay">
+        <!-- 标题 / 副标题：左上角，宽度以取景框为单位限幅 -->
+        <header>
+          <div class="brand">
+            <span class="dot"></span>
+            <h1>{{ config.title || '3D 柱状对比' }}</h1>
+          </div>
+          <div v-if="config.subtitle" class="sub">{{ config.subtitle }}</div>
+        </header>
+
+        <!-- 当前视图徽标：右上角（画面内），出片时保留 -->
+        <div class="metric-chip">
+          <span class="k">当前视图</span>
+          <span class="v">{{ activeView.label }}<i v-if="activeView.unit"> · {{ activeView.unit }}</i></span>
+        </div>
+
+        <!-- 跟随镜头的当前目标卡片：左侧垂直居中（画面内），出片时保留 -->
+        <transition name="fade">
+          <div v-if="active && active.shown" class="target-panel">
+            <div class="tp-head"><span class="tp-dot"></span>当前目标</div>
+            <div class="tp-name">{{ active.name }}</div>
+            <div class="tp-val">
+              {{ active.value.toFixed(activeView.fixed) }}<i>{{ activeView.unit }}</i>
+            </div>
+            <div class="tp-rank">排名第 <b>{{ active.rank }}</b> / {{ active.total }}</div>
+            <div class="tp-bar"><i :style="{ width: (active.revealed / active.total * 100) + '%' }"></i></div>
+          </div>
+        </transition>
+
+        <!-- 数据来源 / 备注：左下角（画面内），有内容才渲染 -->
+        <div v-if="config.source || (config.notes && config.notes.length)" class="vp-source">
+          <div v-if="config.source" class="src-line">{{ config.source }}</div>
+          <div v-for="(nt, i) in config.notes" :key="i" class="note-line">{{ nt }}</div>
+        </div>
+      </div>
+
       <!-- 画幅描边 + 比例标签：仅编辑态显示，出片时隐藏（不进画面） -->
       <div v-if="!capture" class="frame-ring" aria-hidden="true">
         <span class="frame-tag">{{ config.aspect }} · {{ framePx }}</span>
       </div>
     </div>
 
-    <!-- 舞台层（标题 / 徽标 / 面板 / 工具条）：编辑态对齐取景框四角，
-         出片态贴 .stage 内边距。用 --ui-inset 统一表达"UI 安全边距"。 -->
-    <div class="stage-ui">
-      <header>
-        <div class="brand">
-          <span class="dot"></span>
-          <h1>{{ config.title || '3D 柱状对比' }}</h1>
-        </div>
-        <div v-if="config.subtitle" class="sub">{{ config.subtitle }}</div>
-      </header>
+    <!-- 屏幕级 UI 层已合并到 .viewport 内的 .vp-overlay（画面内容）。
+         保留此注释块说明分层：出片（capture）时画面内容照常导出，
+         而 MetricBar（含并入的数据分组）/ DataTable / InfoPanel / .hint
+         各自带 capture 判断并隐藏，不进画面。 -->
 
-      <!-- 当前视图徽标：仅出片（capture）模式显示，避免与右上角数据工具条重叠 -->
-      <div v-if="capture" class="metric-chip">
-        <span class="k">当前视图</span>
-        <span class="v">{{ activeView.label }}<i v-if="activeView.unit"> · {{ activeView.unit }}</i></span>
-      </div>
-
-      <!-- 跟随镜头的目标面板 -->
-      <transition name="fade">
-        <div v-if="!capture && active && active.shown" class="target-panel">
-          <div class="tp-head"><span class="tp-dot"></span>当前目标</div>
-          <div class="tp-name">{{ active.name }}</div>
-          <div class="tp-val">
-            {{ active.value.toFixed(activeView.fixed) }}<i>{{ activeView.unit }}</i>
-          </div>
-          <div class="tp-rank">排名第 <b>{{ active.rank }}</b> / {{ active.total }}</div>
-          <div class="tp-bar"><i :style="{ width: (active.revealed / active.total * 100) + '%' }"></i></div>
-        </div>
-      </transition>
-    </div>
-
-    <DataToolbar :capture="capture" @open-table="tableOpen = true" @open-info="infoOpen = true" />
+    <!-- v2.7.1：原右上角 DataToolbar 已并入 MetricBar 的「数据」分组，
+         形成单一右侧控制栏（数据与视图一处管完），不再单独挂载。 -->
     <MetricBar
       :capture="capture"
       :view-key="viewKey"
@@ -82,6 +106,8 @@
       @update:interval="setBarInterval"
       @update:duration="setDuration"
       @replay="onReplay"
+      @open-table="tableOpen = true"
+      @open-info="infoOpen = true"
     />
 
     <DataTable
@@ -111,12 +137,12 @@
 <script setup>
 import { ref, computed, watchEffect, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import BarRace3D from './components/BarRace3D.vue';
-import DataToolbar from './components/DataToolbar.vue';
 import MetricBar from './components/MetricBar.vue';
 import DataTable from './components/DataTable.vue';
 import InfoPanel from './components/InfoPanel.vue';
 import { useDataset } from './composables/useDataset.js';
 import { decodeConfig, pixelSizeFor } from './core/config.js';
+import { buildOverlayModel, paintOverlay } from './core/overlay.js';
 
 // —— 从 URL 读取运行参数 ——
 // 截帧出片模式：?t=<0..1>（同时隐藏 UI，渲染确定性单帧）
@@ -176,42 +202,124 @@ const active = ref(null);
 // （逐帧确定性录制，避免"点导出时动画已播完 → 只录到静止结尾帧"）
 watch(chartRef, (c) => { window.__barRace = c || null; }, { immediate: true });
 
+// ★ 信息层数据提供者（v2.7.1 修复"录制丢失标题/信息面板"）：
+//   浏览器内【导出 WebM】走 canvas.captureStream()，**只能捕获 WebGL 画布**，
+//   DOM 覆盖层（标题/当前视图/当前目标/来源）不在其中 → 导出视频缺信息。
+//   这里把「构造信息层数据模型」的纯函数暴露出去，由录制器把
+//   ①WebGL 画布 + ②用 Canvas 2D 原生绘制的信息层 合成到同一张离屏 canvas 后再录制。
+//   数据与页面 DOM 版同源（buildOverlayModel 只吃 props 快照，不读 DOM）。
+window.__brOverlayProvider = () => {
+  const vp = document.querySelector('.viewport');
+  const size = vp
+    ? { w: Math.round(vp.clientWidth), h: Math.round(vp.clientHeight) }
+    : { w: window.innerWidth, h: window.innerHeight };
+  return buildOverlayModel({
+    config: config.value,
+    view: activeView.value,
+    active: active.value,
+    theme: theme.value,
+    size,
+    portrait: size.w / size.h < 1,
+  });
+};
+// 调试钩子：把信息层的 Canvas 绘制函数也挂出去（仅 ?debug=1），
+// 供端到端验证「录制器合成的画面确实包含信息层」——直接合成一次并采样像素。
+if (typeof location !== 'undefined' && /[?&]debug=1\b/.test(location.search)) {
+  window.__brPaintOverlay = paintOverlay;
+}
+
 // 主题 → CSS 变量 + 页面背景；同时把画幅比例换算为取景框尺寸（--vp-w/--vp-h）。
 // 取景框算法：在 .stage 可用区域内取所选比例的**最大内接矩形**（居中）。
 //   由 JS 用实测的窗口像素直接算出 wxh（而非把 min()/calc() 写进 CSS var）：
 //   CSS 自定义属性参与 min()/calc() 时嵌套 var 的解析在各引擎不一致，实测页面上会
 //   静默失效（回退成 100% → 取景框恒等于窗口比例）。用 JS 算像素既确定又可断言。
 const CAPTURE_LONG_EDGE = 1920; // 出片长边基准（与 scripts/render.mjs 一致），仅用于展示像素标签
-// 可用区域留边（编辑态）：让取景框四周留出呼吸空间，同时给标题/工具条留位
+// 可用区域留边（编辑态）：让取景框四周留出呼吸空间。
+// v2.7：控制面板移到**右侧**后，纵向已无底部 dock 占位 → 上下留边可大幅收窄，
+// 取景框能更充分利用屏幕（编辑态所见更接近出片构图）。
+// 横向仍需为右侧面板预留：宽屏下由 JS 按面板实测宽度避让（见 computeVpSize）。
 const VP_PAD_X = 0.94; // 横向可用比例（两侧各留 3%）
-const VP_PAD_Y = 0.80; // 纵向可用比例（上下留位给标题栏与底部 dock）
+const VP_PAD_Y = 0.90; // 纵向可用比例（上下各留 5%：给标题留呼吸，底部不再有 dock）
+
+// 右侧控制面板宽度（px）：宽屏下取景框须向左避让，避免被面板压住。
+// 由 DOM 实测（MetricBar 渲染后再量）→ 回退到保守估算值。
+const dockRightW = ref(0);
+// 底部横向 dock 的高度（窄屏/竖屏退回底部布局时）→ 纵向避让。
+const dockBottomH = ref(0);
+function measureDock() {
+  if (typeof window === 'undefined') return;
+  const el = document.querySelector('.dock');
+  if (!el) { dockRightW.value = 0; dockBottomH.value = 0; return; }
+  const r = el.getBoundingClientRect();
+  const vw = window.innerWidth || 1;
+  const vh = window.innerHeight || 1;
+  // ★ 判定"右栏 vs 底栏"不能用 computedStyle 的 left/right 字符串：
+  //   浏览器会把 right:auto 解析成具体像素值（实测 left="1340px"），
+  //   用字符串判空会误判成"底栏"→ 纵向预留 632px → 取景框塌成 281×158（实测事故）。
+  //   改用**几何判据**，与 CSS 断点解耦、任何主题/缩放都成立：
+  //     · 面板右缘贴近屏幕右侧（留边 < 10% 屏宽）→ 视为右栏；
+  //     · 面板下缘贴近屏幕底部（留边 < 10% 屏高）且宽度较大 → 视为底栏。
+  const gapRight = vw - r.right;
+  const gapBottom = vh - r.bottom;
+  const nearRight = gapRight <= vw * 0.10 && r.width <= vw * 0.55;
+  const nearBottom = gapBottom <= vh * 0.10 && !nearRight;
+  if (nearRight) { dockRightW.value = Math.round(r.width) + 26; dockBottomH.value = 0; }
+  else if (nearBottom) { dockRightW.value = 0; dockBottomH.value = Math.round(r.height) + 22; }
+  else { dockRightW.value = 0; dockBottomH.value = 0; }
+}
 
 const vpSize = ref({ w: 0, h: 0 });
+// 取景框是否竖构图（h > w）：驱动画面内信息层的竖屏落位（.viewport.portrait）。
+// ★ 必须与 overlay.js 的 portrait 判定同口径（w/h < 1），
+//   否则 DOM 预览与录制合成的信息层落位会不一致（实测：宽屏窗口 + 9:16 画幅时，
+//   预览把目标卡放左侧居中、录制却画在左下 —— v2.7.1 已统一为取景框口径）。
+const vpPortrait = computed(() => vpSize.value.h > 0 && vpSize.value.w > 0 && vpSize.value.h > vpSize.value.w);
+// 取景框在屏幕上的水平偏移（px，负值=左移）：
+// 右侧有控制面板时，取景框若仍以屏幕中心居中，会与面板重叠（实测重叠 ~71px）。
+// 故按"可用区中心"定位：可用区 = 屏幕左侧到面板左缘。
+// 用 CSS 变量 --vp-dx 交给 .viewport 的 translate 使用。
+const vpDx = ref(0);
 function computeVpSize() {
   if (typeof window === 'undefined') return;
-  if (capture) { vpSize.value = { w: window.innerWidth, h: window.innerHeight }; return; }
+  if (capture) { vpSize.value = { w: window.innerWidth, h: window.innerHeight }; vpDx.value = 0; return; }
   const r = aspectRatio.value || 16 / 9;
-  const availW = window.innerWidth * VP_PAD_X;
-  const availH = window.innerHeight * VP_PAD_Y;
+  const reservedRight = dockRightW.value;   // 右栏占位（含留白）
+  const reservedBottom = dockBottomH.value; // 底栏占位（含留白）
+  const availW = Math.max(120, window.innerWidth * VP_PAD_X - reservedRight);
+  const availH = Math.max(120, window.innerHeight * VP_PAD_Y - reservedBottom);
   // 最大内接：先按宽度试算高，超出则改按高度算宽
   let w = availW;
   let h = w / r;
   if (h > availH) { h = availH; w = h * r; }
   vpSize.value = { w: Math.round(w), h: Math.round(h) };
+  // —— 水平定位：把取景框居中到"可用区"（而不是整屏），从而完全避开右栏 ——
+  //   可用区右边界 = 屏幕宽 − 右栏占位；取景框中心 = 可用区中心。
+  const availRight = window.innerWidth * VP_PAD_X - reservedRight;
+  const vpCenterOnScreen = window.innerWidth / 2;          // 基准（transform 已居中）
+  const availCenter = reservedRight > 0
+    ? Math.max(w / 2 + 4, availRight / 2)                  // 可用区中心
+    : vpCenterOnScreen;
+  vpDx.value = Math.round(availCenter - vpCenterOnScreen);
 }
 computeVpSize();
 
 let vpRaf = 0;
 function onVpResize() {
   cancelAnimationFrame(vpRaf);
-  vpRaf = requestAnimationFrame(computeVpSize);
+  vpRaf = requestAnimationFrame(() => { measureDock(); computeVpSize(); });
 }
 if (typeof window !== 'undefined') {
   window.addEventListener('resize', onVpResize);
   onBeforeUnmount(() => { window.removeEventListener('resize', onVpResize); cancelAnimationFrame(vpRaf); });
 }
 // 比例变化 → 重算取景框（并等一帧让 .viewport 拿到新尺寸后再量一次）
-watch(aspectRatio, () => { computeVpSize(); nextTick(() => measureViewport()); });
+watch(aspectRatio, () => { measureDock(); computeVpSize(); nextTick(() => measureViewport()); });
+// 挂载后实测右侧面板宽度（面板尺寸依赖字体/内容，须等 DOM 落位）
+onMounted(() => {
+  nextTick(() => { measureDock(); computeVpSize(); measureViewport(); });
+  // 字体加载完成后面板宽度可能微变 → 再量一次（幂等）
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { measureDock(); computeVpSize(); });
+});
 
 const cssVars = computed(() => ({
   '--cy': theme.value.accent,
@@ -219,11 +327,11 @@ const cssVars = computed(() => ({
   '--ink': theme.value.ink,
   '--vp-w': `${vpSize.value.w}px`,
   '--vp-h': `${vpSize.value.h}px`,
-  '--ui-inset': capture ? '0px' : `${Math.max(0, (window.innerWidth - vpSize.value.w) / 2)}px`,
-  // 取景框内可用宽度（减两侧留白）：供标题等 UI 限宽，避免窄画幅下文字溢出取景框
-  '--ui-avail': capture
-    ? '42vw'
-    : `calc(${vpSize.value.w}px - var(--space-6) * 2)`,
+  // 取景框水平偏移：右侧有控制面板时左移，居中到"可用区"，避免与面板重叠
+  '--vp-dx': `${vpDx.value}px`,
+  // 取景框内可用宽度（减两侧画面留白）：供标题 / 来源等限宽，避免窄画幅下文字溢出画面。
+  // v2.7 起画面内信息直接以 % 限宽（相对 .viewport），此变量作为上限兜底。
+  '--ui-avail': `${Math.max(80, vpSize.value.w - 80)}px`,
 }));
 
 // 展示用像素标签（长边 1920 下该比例对应的导出分辨率）
@@ -369,15 +477,35 @@ body {
    ★ 关键：预览与导出共用同一套比例定义，故"所见即所得"。
    ============================================================ */
 .viewport {
-  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  position: absolute; top: 50%; left: 50%;
+  /* ★ --vp-dx：把取景框居中到"可用区"而非整屏 —— 右侧控制面板占位时整体左移，
+     保证取景框与面板永不重叠（实测不加偏移会重叠 ~71px）。
+     位移量由 JS 依面板实测宽度算出（见 computeVpSize）。 */
+  transform: translate(calc(-50% + var(--vp-dx, 0px)), -50%);
   width: var(--vp-w, 100vw); height: var(--vp-h, 100vh);
   overflow: hidden; z-index: var(--z-canvas);
   /* 不加 width/height 过渡：尺寸变化需立即生效，否则 3D 画布会读到过渡中途的
      aspect（瞬时比例错误），且 QA 测量也会落在动画中间值上。 */
 }
+/* ============================================================
+   画面内信息层（vp-overlay）—— v2.7 新增
+   标题 / 副标题 / 当前视图 / 当前目标 / 来源备注 均置于取景框**内部**，
+   成为"视频内容"的一部分（导出可见）。
+   · 坐标系 = 取景框（.viewport 为 position:absolute 定位上下文）；
+   · 尺寸用相对取景框的百分比 + 少量 px 安全边距；
+   · 关键：字号/间距不随屏幕变化而脱离画面 —— CSS 里改用 cqw（容器查询单位）
+     会让宽高两向不一致，故这里统一用**取景框像素的百分比**换算，
+     并对极小/极大取景框做 clamp 兜底。
+   ============================================================ */
+.vp-overlay {
+  position: absolute; inset: 0; z-index: var(--z-ui);
+  pointer-events: none;
+  /* 作为取景框内的定位上下文：子项 top/left 相对取景框边缘 */
+}
+
 /* 取景框描边 + 比例/分辨率标签（仅编辑态；出片时 .frame-on 不存在 → 自动隐藏） */
 .frame-ring {
-  position: absolute; inset: 0; pointer-events: none;
+  position: absolute; inset: 0; pointer-events: none; z-index: 6;
   border: 1px solid rgba(53, 208, 255, .22);
   box-shadow: inset 0 0 60px rgba(0, 0, 0, .35);
 }
@@ -395,21 +523,10 @@ body {
   border: 1px solid var(--panel-border); border-radius: 0;
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
-/* 窄画幅（9:16 等）下取景框宽度有限：标题最多占 2/3 宽，标签挪到右下角避免与副标题重叠 */
-@media (max-aspect-ratio: 1/1) {
-  header { max-width: min(var(--ui-avail, 42vw), 68%); }
-  header .sub { font-size: 10px; line-height: 1.45; }
-  .frame-tag { bottom: 8px; right: 8px; left: auto; transform: none; }
-}
 
-/* 舞台 UI 层：编辑态内缩到取景框内侧（--ui-inset），出片态贴整屏。
-   这样比例变窄（如 9:16）时，标题/面板仍落在画面内，不会被取景框裁掉。 */
-.stage-ui { position: absolute; inset: 0; pointer-events: none; z-index: var(--z-ui); }
-.stage.frame-on .stage-ui { inset: 0 calc(var(--ui-inset, 0px) + var(--space-5)); }
-.stage.frame-on header { left: 0; }
-.stage.frame-on .target-panel { left: 0; }
-
-/* —— 透视网格地面 —— */
+/* —— 透视网格地面 ——
+   注：网格 / 地平线 / HUD 仍是"舞台级"装饰，铺满 .stage（不只取景框），
+   因为它们表达的是"科技感氛围"而非画面内容；出片模式下 .stage 即取景框。 */
 .grid-floor {
   position: absolute; left: -25%; right: -25%; bottom: -6%; height: 52%;
   background-image:
@@ -454,144 +571,165 @@ body {
   .scanline, header .dot { animation: none; }
 }
 
-/* —— 标题 —— */
-/* 编辑态标题宽度跟随取景框（--ui-avail）：窄画幅（如 9:16）下也不会溢出到取景框之外。
-   出片态（无 .frame-on）取景框铺满屏幕 → 等价于原来的 42vw。 */
+/* ============================================================
+   画面内信息排版（相对取景框定位）
+   · 采用"取景框百分比 + 上下限 clamp"：随取景框缩放而缩放，
+     同时避免极窄（9:16）或极宽屏下文字过大/过小。
+   · 用 --vp-w/--vp-h 派生一组排版变量，供本区块各处复用。
+   ============================================================ */
+.vp-overlay {
+  --ov-pad-x: clamp(14px, calc(var(--vp-w, 100vw) * 0.030), 44px);
+  --ov-pad-y: clamp(12px, calc(var(--vp-h, 100vh) * 0.038), 34px);
+  --ov-title:  clamp(15px, calc(var(--vp-w, 100vw) * 0.0146), 30px);
+  --ov-sub:    clamp(10px, calc(var(--vp-w, 100vw) * 0.0080), 15px);
+  --ov-name:   clamp(17px, calc(var(--vp-w, 100vw) * 0.0174), 34px);
+  --ov-val:    clamp(20px, calc(var(--vp-w, 100vw) * 0.0209), 42px);
+  --ov-panel-w: clamp(160px, calc(var(--vp-w, 100vw) * 0.152), 300px);
+}
+
+/* —— 标题（画面左上）—— */
 header {
-  position: absolute; top: var(--space-5); left: var(--space-6); color: var(--ink);
-  pointer-events: none; z-index: var(--z-ui); max-width: var(--ui-avail, 42vw);
+  position: absolute; top: var(--ov-pad-y); left: var(--ov-pad-x);
+  color: var(--ink); pointer-events: none; z-index: var(--z-ui);
+  /* 限宽：为右上角徽标与右侧内容留出空间，窄画幅下最多 62% 取景框宽 */
+  max-width: min(62%, var(--ui-avail, 62%));
 }
 header.hidden { display: none; }
 header .brand { display: flex; align-items: center; gap: var(--space-2); }
 header .dot {
-  width: 9px; height: 9px; border-radius: 50%; background: var(--cy); flex: none;
+  width: clamp(6px, calc(var(--vp-w, 100vw) * 0.0063), 13px);
+  height: clamp(6px, calc(var(--vp-w, 100vw) * 0.0063), 13px);
+  border-radius: 50%; background: var(--cy); flex: none;
   box-shadow: 0 0 12px var(--cy); animation: pulse 1.8s ease-in-out infinite;
 }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
 header h1 {
-  margin: 0; font-size: 21px; letter-spacing: 2px; font-weight: 700;
-  text-shadow: 0 0 20px var(--cy-dim);
+  margin: 0; font-size: var(--ov-title); letter-spacing: 2px; font-weight: 700;
+  text-shadow: 0 0 20px var(--cy-dim); line-height: 1.22;
 }
 header .sub {
-  margin-top: 7px; padding-left: 18px; font-size: 12px; color: var(--text-muted);
+  margin-top: clamp(4px, calc(var(--vp-h, 100vh) * 0.009), 10px);
+  padding-left: clamp(10px, calc(var(--vp-w, 100vw) * 0.0125), 26px);
+  font-size: var(--ov-sub); color: var(--text-muted);
   letter-spacing: 1px; line-height: 1.5;
 }
 
-/* —— 视图徽标 —— */
+/* —— 视图徽标（画面右上角，随取景框缩放）—— */
 .metric-chip {
-  position: fixed; top: 30px; right: 42px; z-index: var(--z-ui);
+  position: absolute; top: var(--ov-pad-y); right: var(--ov-pad-x); z-index: var(--z-ui);
   display: flex; align-items: stretch; overflow: hidden;
   border: 1px solid var(--panel-border-strong); background: var(--panel-bg);
-  backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px); pointer-events: none;
   clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
-  pointer-events: none;
 }
 .metric-chip.hidden { display: none; }
 .metric-chip .k {
-  padding: 7px var(--space-3); font-size: 11px; letter-spacing: 2px; color: #8fb6cf;
-  background: var(--cy-dim);
+  padding: clamp(4px, calc(var(--vp-h, 100vh) * 0.008), 9px) clamp(7px, calc(var(--vp-w, 100vw) * 0.008), 16px);
+  font-size: clamp(9px, calc(var(--vp-w, 100vw) * 0.0057), 13px);
+  letter-spacing: 2px; color: #8fb6cf; background: var(--cy-dim);
 }
 .metric-chip .v {
-  padding: 7px var(--space-4); font-size: 14px; font-weight: 700; letter-spacing: 1.2px; color: var(--cy);
+  padding: clamp(4px, calc(var(--vp-h, 100vh) * 0.008), 9px) clamp(8px, calc(var(--vp-w, 100vw) * 0.0104), 20px);
+  font-size: clamp(11px, calc(var(--vp-w, 100vw) * 0.0073), 17px);
+  font-weight: 700; letter-spacing: 1.2px; color: var(--cy);
   text-shadow: 0 0 14px var(--cy-dim);
 }
 .metric-chip .v i { font-style: normal; font-weight: 600; color: #8fb6cf; }
 
-/* —— 跟随目标面板 —— */
+/* —— 跟随目标面板（画面左侧垂直居中，随取景框缩放）—— */
 .target-panel {
-  position: absolute; left: var(--space-6); top: 50%; transform: translateY(-50%); z-index: var(--z-ui);
-  min-width: 216px; padding: 15px 18px 16px;
+  position: absolute; left: var(--ov-pad-x); top: 50%; transform: translateY(-50%); z-index: var(--z-ui);
+  width: var(--ov-panel-w); min-width: 0;
+  padding: clamp(9px, calc(var(--vp-h, 100vh) * 0.016), 19px) clamp(10px, calc(var(--vp-w, 100vw) * 0.012), 24px);
   border: 1px solid var(--panel-border-strong); background: var(--panel-bg-strong);
   backdrop-filter: blur(6px); pointer-events: none;
   clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px));
   box-shadow: var(--glow), inset 0 0 22px rgba(53, 232, 255, .05);
 }
-.tp-head { display: flex; align-items: center; gap: 7px; font-size: 11px; letter-spacing: 2.5px; color: #79a6c4; }
-.tp-dot { width: 6px; height: 6px; background: var(--cy); box-shadow: 0 0 9px var(--cy); }
-.tp-name { margin-top: var(--space-2); font-size: 25px; font-weight: 700; letter-spacing: 2px; color: var(--ink); text-shadow: 0 0 18px var(--cy-dim); }
-.tp-val {
-  margin-top: 5px; font-size: 30px; font-weight: 800; letter-spacing: 1px; color: var(--cy);
-  text-shadow: 0 0 20px var(--cy-dim); font-variant-numeric: tabular-nums;
+.tp-head {
+  display: flex; align-items: center; gap: 7px;
+  font-size: clamp(9px, calc(var(--vp-w, 100vw) * 0.0057), 13px);
+  letter-spacing: 2.5px; color: #79a6c4;
 }
-.tp-val i { font-size: 14px; font-style: normal; margin-left: 5px; color: #7fb6d1; font-weight: 600; }
-.tp-rank { margin-top: var(--space-2); font-size: 12px; letter-spacing: 1.4px; color: var(--text-dim); }
-.tp-rank b { color: var(--ink); font-size: 15px; }
-.tp-bar { margin-top: 10px; height: 3px; background: var(--cy-dim); opacity: .9; overflow: hidden; border-radius: 2px; }
+.tp-dot { width: 6px; height: 6px; background: var(--cy); box-shadow: 0 0 9px var(--cy); flex: none; }
+.tp-name {
+  margin-top: clamp(4px, calc(var(--vp-h, 100vh) * 0.009), 10px);
+  font-size: var(--ov-name); font-weight: 700; letter-spacing: 2px; color: var(--ink);
+  text-shadow: 0 0 18px var(--cy-dim); line-height: 1.2;
+}
+.tp-val {
+  margin-top: 5px; font-size: var(--ov-val); font-weight: 800; letter-spacing: 1px; color: var(--cy);
+  text-shadow: 0 0 20px var(--cy-dim); font-variant-numeric: tabular-nums; line-height: 1.15;
+}
+.tp-val i {
+  font-size: clamp(10px, calc(var(--vp-w, 100vw) * 0.0073), 17px);
+  font-style: normal; margin-left: 5px; color: #7fb6d1; font-weight: 600;
+}
+.tp-rank {
+  margin-top: clamp(4px, calc(var(--vp-h, 100vh) * 0.009), 10px);
+  font-size: clamp(9px, calc(var(--vp-w, 100vw) * 0.0063), 14px);
+  letter-spacing: 1.4px; color: var(--text-dim);
+}
+.tp-rank b { color: var(--ink); font-size: clamp(11px, calc(var(--vp-w, 100vw) * 0.0078), 18px); }
+.tp-bar { margin-top: clamp(5px, calc(var(--vp-h, 100vh) * 0.011), 12px); height: 3px; background: var(--cy-dim); opacity: .9; overflow: hidden; border-radius: 2px; }
 .tp-bar i { display: block; height: 100%; background: var(--cy); box-shadow: 0 0 12px var(--cy); transition: width var(--t-base) ease-out; }
 .fade-enter-active, .fade-leave-active { transition: opacity var(--t-base) var(--ease), transform var(--t-base) var(--ease); }
 .fade-enter-from, .fade-leave-to { opacity: 0; transform: translateY(-50%) translateX(-8px); }
 
+/* —— 来源 / 备注（画面左下角，随取景框缩放）—— */
+.vp-source {
+  position: absolute; left: var(--ov-pad-x); bottom: var(--ov-pad-y); z-index: var(--z-ui);
+  max-width: min(58%, var(--ui-avail, 58%));
+  font-size: clamp(8px, calc(var(--vp-w, 100vw) * 0.0052), 12px);
+  line-height: 1.55; letter-spacing: .6px; color: var(--text-faint);
+  pointer-events: none;
+}
+.vp-source .src-line { color: var(--text-dim); }
+.vp-source .note-line { opacity: .85; }
+
+/* 操作提示：右侧已停靠控制面板 → 提示移至**左上**（标题在取景框内，二者不冲突） */
 .hint {
-  position: fixed; right: 26px; bottom: 30px; color: var(--text-faint); font-size: 12px;
-  letter-spacing: .5px; z-index: var(--z-ui); max-width: 46vw; text-align: right; line-height: 1.6;
+  position: fixed; left: 22px; bottom: 22px; color: var(--text-faint); font-size: 12px;
+  letter-spacing: .5px; z-index: var(--z-ui); max-width: 40vw; text-align: left; line-height: 1.6;
 }
 .hint.hidden { display: none; }
 
 /* ============================================================
-   响应式适配
-   目标：窄屏 / 竖屏下标题、徽标、工具条、面板互不重叠遮挡。
+   响应式适配（v2.7）
+   画面内信息（header / 徽标 / 目标面板 / 来源）**不再按屏幕断点重排**：
+   它们随取景框（--vp-w/--vp-h）等比缩放，任何屏幕/画幅下布局关系一致
+   —— 这也保证"改窗口不会改变视频观感"。
+   这里只处理两件事：
+     · 取景框自身在屏幕上的留边（给右侧控制面板让位）；
+     · 极窄画幅下画面内信息的大小/密度微调（避免拥挤）。
    ============================================================ */
 
-/* —— 中等屏（紧凑笔记本 / 横屏平板）—— */
-@media (max-width: 1024px) {
-  .stage.frame-on .stage-ui { inset: 0 calc(var(--ui-inset, 0px) + var(--space-4)); }
-  header { left: var(--space-5); top: var(--space-4); max-width: min(50vw, var(--ui-avail, 50vw)); }
-  header h1 { font-size: 18px; }
-  header .sub { font-size: 11px; }
-  .target-panel { left: var(--space-5); min-width: 190px; padding: 13px 15px 14px; }
-  .tp-name { font-size: 21px; }
-  .tp-val { font-size: 25px; }
-  .metric-chip { top: var(--space-4); right: var(--space-5); }
-  .stage.frame-on .target-panel { left: 0; }
+/* —— 竖构图画幅（9:16 / 1:1 等）：标题限宽、目标面板移到左下，避免纵向拥挤 ——
+   ★ v2.7.1：由窗口媒体查询改为 .viewport.portrait 类（取景框自身宽高比驱动）。
+     原媒体查询按**窗口**方向判定，宽屏窗口里切 9:16 画幅时不会命中，
+     而 Canvas 录制层（overlay.js）按**取景框**判定 → 两层落位不一致，
+     预览与出片观感对不上。现在两层同口径（取景框 h>w）。 */
+/* 标题：竖构图下只占左上，避开右上徽标；副标题限宽防溢出 */
+.viewport.portrait header { max-width: 74%; }
+.viewport.portrait header .sub { max-width: 100%; }
+/* 目标面板：贴左下（不与居中的柱群抢中线），宽度按取景框自适应 */
+.viewport.portrait .target-panel {
+  left: var(--ov-pad-x);
+  top: auto; bottom: calc(var(--ov-pad-y) + 4.2em);
+  transform: none;
+  width: var(--ov-panel-w); max-width: 66%;
+}
+.viewport.portrait .fade-enter-from,
+.viewport.portrait .fade-leave-to { opacity: 0; transform: translateX(-8px); }
+/* 来源与目标面板同列时下移会被遮挡 → 竖构图下来源移到右下角 */
+.viewport.portrait .vp-source {
+  left: auto; right: var(--ov-pad-x); bottom: var(--ov-pad-y);
+  text-align: right; max-width: 56%;
 }
 
-/* —— 窄屏（手机横屏 / 小窗）—— */
-@media (max-width: 720px) {
-  /* 标题让位给工具条：压缩为更小字号、限制行宽 */
-  .stage.frame-on .stage-ui { inset: 0 calc(var(--ui-inset, 0px) + var(--space-3)); }
-  header { top: var(--space-3); left: var(--space-4); max-width: min(60vw, var(--ui-avail, 60vw)); }
-  header h1 { font-size: 15px; letter-spacing: 1px; }
-  header .sub { font-size: 10px; padding-left: 0; margin-top: var(--space-1); }
-  header .dot { width: 7px; height: 7px; }
-
-  /* 目标面板：从垂直居中改为贴右上（避免遮挡画面中央的柱群） */
-  .target-panel {
-    left: auto; right: var(--space-4); top: 74px; transform: none;
-    min-width: 150px; padding: 10px 12px 11px;
-  }
-  .stage.frame-on .target-panel { left: auto; right: 0; }
-  .tp-name { font-size: 17px; margin-top: var(--space-1); }
-  .tp-val { font-size: 20px; }
-  .tp-head { font-size: 10px; }
-  .fade-enter-from, .fade-leave-to { opacity: 0; transform: translateX(8px); }
-
-  /* 徽标：截帧模式仍居中；否则与标题错开 */
-  .metric-chip { top: var(--space-3); right: var(--space-4); }
-  .metric-chip .v { font-size: 13px; padding: 6px 12px; }
-  .metric-chip .k { font-size: 10px; padding: 6px 9px; }
-
-  .hint { display: none; } /* 小屏隐藏操作提示，减少噪点 */
-}
-
-/* —— 竖屏：标题上移、面板下沉，给画面中央让位 —— */
-@media (orientation: portrait) {
-  header h1 { letter-spacing: 1px; }
-  .target-panel { top: auto; bottom: 92px; transform: none; }
-  .stage.frame-on .target-panel { left: 0; right: 0; }
-  .fade-enter-from, .fade-leave-to { opacity: 0; transform: translateY(8px); }
-}
-
-/* —— 手机竖屏（窄+竖向）：标题独占一行，徽标挪到标题下方，避免重叠 —— */
-@media (max-width: 560px) and (orientation: portrait) {
-  header { max-width: min(calc(100vw - var(--space-4) * 2), var(--ui-avail, 100vw)); }
+/* —— 极窄屏幕（手机竖屏）：取景框纵向铺满，信息层继续等比（无需断点重排）—— */
+@media (max-width: 560px) {
   header .sub { white-space: normal; overflow: hidden; text-overflow: clip; }
-  /* 底部 dock 为流式网格（约 130px 高），目标面板与徽标须抬高让位 */
-  .target-panel { bottom: 168px; left: var(--space-4); right: var(--space-4); min-width: 0; }
-  .stage.frame-on .target-panel { left: 0; right: 0; }
-  .metric-chip {
-    top: auto; left: var(--space-4); right: auto; bottom: 140px;
-  }
-  .metric-chip .v { font-size: 12px; padding: 6px 10px; }
-  .metric-chip .k { font-size: 10px; padding: 6px 8px; }
+  /* 底部为横向 dock（约 130px 高）时，画面内信息不受影响（它们在取景框内） */
 }
 </style>
