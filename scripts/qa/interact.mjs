@@ -97,6 +97,72 @@ async function main() {
     const tplOk = await guard(clickByText('.data-ui button', '模板', true), 6000, false);
     check('CSV 模板按钮可点击', tplOk);
 
+    // 6b) v2.6 画幅比例：点 9:16 → 激活态切换 + 取景框实际比例随之改变
+    let aspectOk = false, aspectDetail = '';
+    {
+      const before = await page.$eval('.viewport', (el) => {
+        const r = el.getBoundingClientRect();
+        return r.height ? r.width / r.height : 0;
+      });
+      if (await clickByText('.ui button', '9:16')) {
+        await sleep(700); // 等 watch(aspectRatio) → computeVpSize → 布局
+        const after = await page.evaluate(() => {
+          const el = document.querySelector('.viewport');
+          const r = el.getBoundingClientRect();
+          return { ratio: r.height ? r.width / r.height : 0, w: Math.round(r.width), h: Math.round(r.height) };
+        });
+        const activeOk = await page.$$eval('.ui button', (bs) => {
+          const b = bs.find((x) => x.textContent.trim() === '9:16');
+          return b ? b.classList.contains('active') : false;
+        });
+        const errPct = Math.abs(after.ratio - 0.5625) / 0.5625 * 100;
+        aspectOk = activeOk && errPct <= 2;
+        aspectDetail = `激活=${activeOk} ${after.w}×${after.h} 比例=${after.ratio.toFixed(4)}（原 ${before.toFixed(4)}，偏差 ${errPct.toFixed(2)}%）`;
+      }
+    }
+    check('v2.6 画幅切换：按钮激活 + 取景框比例跟随', aspectOk, aspectDetail);
+
+    // 6c) v2.6 播放间隔：点 3s → 激活态切换（总时长应由该间隔推导）
+    let paceOk = false, paceDetail = '';
+    {
+      if (await clickByText('.ui button', '3s')) {
+        await sleep(400);
+        paceOk = await page.$$eval('.ui button', (bs) => {
+          const b = bs.find((x) => x.textContent.trim() === '3s');
+          return b ? b.classList.contains('active') : false;
+        });
+        // 时长读数（"时长 X.Xs"）应随之间隔变化而出现
+        paceDetail = await page.$eval('.dock', (el) => (el.textContent.match(/时长\s*[\d.]+s/) || [''])[0]);
+      }
+    }
+    check('v2.6 播放间隔：3s 档可切换（激活）', paceOk, paceDetail);
+
+    // 6d) v2.6 信息面板：打开 → 改标题 → 应用 → 标题同步到 header
+    let infoOk = false, infoDetail = '';
+    if (await clickByText('.data-ui button', '信息', true)) {
+      const shown = await guard(page.waitForSelector('input[data-k="title"]', { timeout: 6000 }), 8000, null);
+      if (shown) {
+        await page.$eval('input[data-k="title"]', (el) => {
+          el.value = 'QA 标题校验';
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        await sleep(200);
+        const applied = await guard((async () => {
+          const texts = await page.$$eval('.box .actions button', (bs) => bs.map((b) => b.textContent.trim()));
+          const i = texts.findIndex((t) => t.includes('应用'));
+          if (i < 0) return false;
+          const bs = await page.$$('.box .actions button');
+          await bs[i].click();
+          return true;
+        })(), 8000, false);
+        await sleep(600);
+        const title = await page.$eval('header h1', (el) => el.textContent.trim());
+        infoOk = applied && title === 'QA 标题校验';
+        infoDetail = `标题=「${title}」`;
+      }
+    }
+    check('v2.6 信息面板：标题编辑即时同步', infoOk, infoDetail);
+
     // 7) 控制台异常（favicon 404 已消除；其余任何 error 都算失败）
     check('无未捕获异常 / 控制台错误', errors.length === 0, errors.slice(0, 3).join(' | ') || 'clean');
   } catch (e) {

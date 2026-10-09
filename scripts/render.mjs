@@ -2,43 +2,56 @@
 // 出片 CLI（SPEC 第 6 节）：配置驱动的 3D 柱状赛跑 → MP4
 //
 // 用法：
-//   node scripts/render.mjs --config samples/huining.json [--view area] [--theme tech] \
-//     [--shape cylinder] [--frames 180] [--fps 30] \
-//     [--out out/huining_area.mp4] [--poster out/huining_area.png] [--all-views]
+//   node scripts/render.mjs --config samples/huining-v2.json [--view area] [--theme tech] \
+//     [--shape cylinder] [--aspect 16:9] [--frames 180] [--fps 30] \
+//     [--out out/huining_area.mp4] [--poster out/huining_area.png] [--all-views] [--include-disabled]
 //
 // 说明：
-//   - 缺省 --config=samples/huining.json --frames=180 --fps=30
+//   - 缺省 --config=samples/huining-v2.json --frames=180 --fps=30
 //   - 不指定 --view 时渲染该 config 的全部 views（等价于 --all-views）
 //   - --shape 覆盖形状：bar/cube/cylinder/rounded/sphere（缺省用配置内 shape/defaultShape）
+//   - --aspect 覆盖画幅：16:9 / 9:16 / 1:1 / 4:3（缺省用配置内 aspect）。
+//     ★ 导出像素 = 该比例下"长边 1920"的分辨率：16:9→1920×1080、9:16→1080×1920、
+//       1:1→1920×1920、4:3→1920×1440。与浏览器预览取景框（.viewport）同一份比例定义，
+//       因此**预览所见 = 导出所得**。分辨率标签同时写入 URL（?aspect=）供页面自检。
+//   - 配置支持两种格式，自动识别：内部格式 / v2 数据模板（samples/huining-v2.json）。
+//     处理 v2 模板时，enabled:false 的指标默认跳过，--include-disabled 可强制纳入。
 //   - 缺省输出 out/<configName>_<view>.<encExt>（encExt 由可用编码器决定：mp4/webm）
-//   - 页面 URL 契约：/?t=<0..1>&view=<viewKey>&theme=<themeName>&shape=<shape>&cfg=<base64url(configJSON)>
+//   - 页面 URL 契约：/?t=<0..1>&view=<viewKey>&theme=<themeName>&shape=<shape>&aspect=<ratio>&interval=<ms>&cfg=<base64url(configJSON)>
 //     cfg 由 src/core/config.js 的 encodeConfig 生成（UTF-8 安全）。
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { encodeConfig, normalizeConfig } from '../src/core/config.js';
+import { encodeConfig, normalizeConfig, pixelSizeFor, normalizeAspect, deriveDuration } from '../src/core/config.js';
 import { pickEncoder, resolveChromium, renderFrames } from './lib/capture-core.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 
+// 出片长边基准像素：四种比例共用同一长边 → 画面"体量"一致，仅画幅形状不同
+const LONG_EDGE = 1920;
+
 function parseArgs(argv) {
   const o = {
-    config: 'samples/huining.json',
-    view: null, theme: null, shape: null,
+    config: 'samples/huining-v2.json',
+    view: null, theme: null, shape: null, aspect: null, interval: null,
     frames: 180, fps: 30,
     // 原始字符串（用于非法值报错时回显用户实际输入，而非 parseInt 后的 NaN）
-    framesArg: null, fpsArg: null,
+    framesArg: null, fpsArg: null, intervalArg: null,
     out: null, poster: null,
     allViews: false,
+    includeDisabled: false,
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--all-views') o.allViews = true;
+    else if (a === '--include-disabled') o.includeDisabled = true;
     else if (a === '--config') o.config = argv[++i];
     else if (a === '--view') o.view = argv[++i];
     else if (a === '--theme') o.theme = argv[++i];
     else if (a === '--shape') o.shape = argv[++i];
+    else if (a === '--aspect') o.aspect = argv[++i];
+    else if (a === '--interval') { o.intervalArg = argv[++i]; o.interval = parseInt(o.intervalArg, 10); }
     else if (a === '--frames') { o.framesArg = argv[++i]; o.frames = parseInt(o.framesArg, 10); }
     else if (a === '--fps') { o.fpsArg = argv[++i]; o.fps = parseInt(o.fpsArg, 10); }
     else if (a === '--out') o.out = argv[++i];
@@ -55,13 +68,16 @@ function insertView(out, view) {
   return `${base}_${view}${ext || '.mp4'}`;
 }
 
-// —— 数值参数校验（任务四）——
+// —— 数值参数校验（任务四 / v2.6 扩充）——
 // 返回错误信息数组（空数组表示通过）。规则：
-//   · --frames：必须为正整数（≥2，出片至少需要 2 帧才能合成）
-//   · --fps   ：必须为 1..60 的整数
+//   · --frames  ：必须为正整数（≥2，出片至少需要 2 帧才能合成）
+//   · --fps     ：必须为 1..60 的整数
+//   · --interval：必须为正整数（ms，200..20000）
+//   · --aspect  ：必须是 16:9 / 9:16 / 1:1 / 4:3 之一
 // 说明：parseArgs 用 parseInt 解析，无法区分"未提供"与"非法"——未提供时取默认值，
 // 非法字符串会得到 NaN，故此处对 NaN 单独给出"应为整数"的提示。
 const FPS_MIN = 1, FPS_MAX = 60, FRAMES_MIN = 2;
+const INTERVAL_MIN = 200, INTERVAL_MAX = 20000;
 
 export function validateNumericArgs(o) {
   const errors = [];
@@ -76,6 +92,18 @@ export function validateNumericArgs(o) {
     errors.push(`--fps 应为整数，收到「${o.fpsArg ?? o.fps}」`);
   } else if (o.fps < FPS_MIN || o.fps > FPS_MAX) {
     errors.push(`--fps 应在 ${FPS_MIN}–${FPS_MAX} 之间，收到 ${o.fps}`);
+  }
+
+  if (o.interval != null) {
+    if (!Number.isInteger(o.interval) || Number.isNaN(o.interval)) {
+      errors.push(`--interval 应为整数(ms)，收到「${o.intervalArg ?? o.interval}」`);
+    } else if (o.interval < INTERVAL_MIN || o.interval > INTERVAL_MAX) {
+      errors.push(`--interval 应在 ${INTERVAL_MIN}–${INTERVAL_MAX} ms 之间，收到 ${o.interval}`);
+    }
+  }
+
+  if (o.aspect != null && !normalizeAspect(o.aspect)) {
+    errors.push(`--aspect 非法，收到「${o.aspect}」，可选：16:9 / 9:16 / 1:1 / 4:3`);
   }
 
   return errors;
@@ -103,7 +131,9 @@ function main() {
   try { raw = JSON.parse(fs.readFileSync(cfgPath, 'utf8')); }
   catch (e) { console.error('❌ 配置文件不是合法 JSON: ' + e.message); process.exit(2); }
 
-  const { config, warns } = normalizeConfig(raw);
+  // includeDisabled：v2 模板里 enabled:false 的指标（数据不可用）默认被跳过，
+  // 该开关强制纳入（对应 normalizeConfig 透传给 adaptV2 的 opts.includeDisabled）。
+  const { config, warns } = normalizeConfig(raw, { includeDisabled: opts.includeDisabled });
   if (warns.length) {
     console.warn('⚠ 配置规范化提示:');
     warns.forEach((w) => console.warn('   - ' + w));
@@ -126,6 +156,21 @@ function main() {
     }
     shapeName = s;
   }
+
+  // —— 画幅比例（预览 / 导出共用）——
+  // 优先级：--aspect CLI > 配置内 aspect > 内部默认 16:9（normalizeConfig 已兜底）。
+  // 由该比例推导导出像素（长边固定 1920），并把比例同步进 URL，使页面取景框与导出一致。
+  const aspectKey = opts.aspect != null ? normalizeAspect(opts.aspect) : normalizeAspect(config.aspect);
+  const { width, height } = pixelSizeFor(aspectKey, LONG_EDGE);
+  // --interval 覆盖：改写配置内的 barIntervalMs，并**重算**总时长（interval 语义优先于旧 duration）
+  if (opts.interval != null) {
+    config.barIntervalMs = opts.interval;
+    config._durationExplicit = false; // 解锁 → 允许按新间隔推导
+    const maxItems = config.views.reduce((m, v) => Math.max(m, v.items.length), 0) || 1;
+    config.durationMs = deriveDuration(maxItems, opts.interval, config.revealRatio);
+    console.log(`ℹ --interval=${opts.interval}ms → 重算总时长 ${config.durationMs}ms（${maxItems} 根柱）`);
+  }
+
   const cfgB64 = encodeConfig(config);
 
   // 决定本次要渲染的 view 列表
@@ -142,11 +187,14 @@ function main() {
   const chromiumPath = resolveChromium();
 
   const run = async () => {
+    console.log(`▶ 画幅 ${aspectKey} → 导出 ${width}×${height}（长边 ${LONG_EDGE}）`);
     for (const view of views) {
       const label = (config.views.find((v) => v.key === view) || {}).label || view;
       const urlForFrame = (t) =>
         `/?t=${t.toFixed(4)}&view=${encodeURIComponent(view)}&theme=${encodeURIComponent(themeName)}`
         + (shapeName ? `&shape=${encodeURIComponent(shapeName)}` : '')
+        + `&aspect=${encodeURIComponent(aspectKey)}`
+        + `&interval=${config.barIntervalMs}`
         + `&cfg=${cfgB64}`;
       const outRel = opts.out
         ? (multi ? insertView(opts.out, view) : opts.out)
@@ -170,6 +218,9 @@ function main() {
           urlForFrame,
           encoder: enc,
           chromiumPath,
+          // ★ 导出像素：与浏览器预览取景框同一比例 → 预览所见 = 导出所得
+          width,
+          height,
         });
         console.log(`✅ 生成: ${res.out}${res.poster ? ' (poster: ' + res.poster + ')' : ''}`);
       } catch (e) {

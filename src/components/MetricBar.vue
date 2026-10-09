@@ -73,7 +73,45 @@
       </div>
     </div>
 
-    <!-- ③ 主题分组 -->
+    <!-- ③ 比例分组（画幅；预览取景框与导出分辨率共用同一份定义） -->
+    <div class="group" role="group" aria-label="画幅比例">
+      <span class="group-tag">比例</span>
+      <div class="seg">
+        <button
+          v-for="a in aspectOptions"
+          :key="a.key"
+          class="seg-btn aspect"
+          :class="{ active: a.key === aspectKey }"
+          :aria-pressed="a.key === aspectKey"
+          @click="$emit('update:aspect', a.key)"
+          :title="a.label"
+        >
+          <span class="aframe" :class="'af-' + a.key.replace(':', '-')" aria-hidden="true"></span>
+          <span class="lbl">{{ a.key }}</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- ④ 节奏分组：每根柱子弹出间隔（总时长按间隔自动推导） -->
+    <div class="group" role="group" aria-label="播放节奏">
+      <span class="group-tag">间隔</span>
+      <div class="seg">
+        <button
+          v-for="iv in intervalOptions"
+          :key="iv"
+          class="seg-btn pace"
+          :class="{ active: iv === intervalMs }"
+          :aria-pressed="iv === intervalMs"
+          @click="$emit('update:interval', iv)"
+          :title="`每根柱子 ${iv / 1000}s`"
+        >{{ (iv / 1000).toFixed(iv % 1000 ? 1 : 0) }}s</button>
+      </div>
+      <span class="pace-hint" :class="{ locked: durationLocked }">
+        时长 {{ (durationMs / 1000).toFixed(1) }}s{{ durationLocked ? ' · 手动' : ' · 自动' }}
+      </span>
+    </div>
+
+    <!-- ⑤ 主题分组 -->
     <div class="group" role="group" aria-label="主题切换">
       <span class="group-tag">主题</span>
       <div class="seg">
@@ -91,7 +129,7 @@
       </div>
     </div>
 
-    <!-- ④ 操作分组 -->
+    <!-- ⑥ 操作分组 -->
     <div class="group" role="group" aria-label="操作">
       <span class="group-tag">操作</span>
       <div class="seg">
@@ -113,20 +151,34 @@
 <script setup>
 import { ref } from 'vue';
 import { useDataset } from '../composables/useDataset.js';
-import { SHAPES, SHAPE_LABELS } from '../core/config.js';
+import { SHAPES, SHAPE_LABELS, ASPECTS, ASPECT_KEYS } from '../core/config.js';
 
 const props = defineProps({
   capture: { type: Boolean, default: false },
   viewKey: { type: String, default: '' },
   themeKey: { type: String, default: '' },
   shapeKey: { type: String, default: 'bar' },
+  // v2.6：画幅比例 / 播放间隔 / 总时长
+  aspectKey: { type: String, default: '16:9' },
+  intervalMs: { type: Number, default: 2000 },
+  durationMs: { type: Number, default: 9000 },
+  durationLocked: { type: Boolean, default: false },
 });
-const emit = defineEmits(['update:view', 'update:theme', 'update:shape', 'replay']);
+const emit = defineEmits([
+  'update:view', 'update:theme', 'update:shape',
+  'update:aspect', 'update:interval', 'update:duration',
+  'replay',
+]);
 
 const { viewList, themeList, state } = useDataset();
 
 const shapeList = SHAPES;
 const shapeLabel = (s) => SHAPE_LABELS[s] || s;
+
+// 比例选项（含 label，供 title 提示）
+const aspectOptions = ASPECT_KEYS.map((k) => ({ key: k, label: ASPECTS[k].label }));
+// 间隔快捷档位（ms）：2s 为默认推荐值，与「每根柱子弹出间隔」语义一一对应
+const intervalOptions = [1000, 1500, 2000, 3000, 5000];
 
 const exp = ref('');
 const busy = ref(false);
@@ -234,9 +286,12 @@ function exportWebM() {
    ============================================================ */
 .dock {
   position: fixed; left: 50%; bottom: var(--space-5); transform: translateX(-50%);
-  display: grid; grid-template-columns: auto auto; gap: 9px 18px;
-  align-items: end; justify-content: center; z-index: var(--z-ui);
-  max-width: 96vw; padding: 12px 18px 13px;
+  /* ★ 流式自适应布局（v2.6）：由固定 2×2 网格改为「自动换行 flex」。
+     每个分组按内容宽度自然排布，容器装不下时自动折行 —— 不再依赖断点跳变，
+     任何宽度下既不横向溢出，也能尽量多列并排（不再出现"一列堆到底"的空旷）。 */
+  display: flex; flex-wrap: wrap; gap: 8px 16px;
+  align-items: flex-end; justify-content: center; z-index: var(--z-ui);
+  width: max-content; max-width: 96vw; padding: 12px 18px 13px;
   background: var(--panel-bg); border: 1px solid var(--panel-border);
   backdrop-filter: blur(10px) saturate(1.15);
   border-radius: var(--radius-lg);
@@ -320,30 +375,45 @@ function exportWebM() {
 .seg-btn.active .geo { color: #04121f; }
 .seg-btn.active .geo svg [fill="#fff"] { fill: #eafcff; }
 
-/* —— 导出状态文字（grid 第二行、跨两列居中）—— */
+/* —— 画幅比例图标：按各比例绘制等比小窗，直观表达 16:9 / 9:16 / 1:1 / 4:3 ——
+   用 aspect-ratio 属性直接由"比例"生成外观，避免四套硬编码宽高。 */
+.aframe {
+  display: block; flex: none; height: 14px;
+  border: 1.5px solid currentColor; border-radius: 2px; opacity: .9;
+}
+.af-16-9 { aspect-ratio: 16 / 9; }
+.af-9-16 { aspect-ratio: 9 / 16; height: 17px; }
+.af-1-1 { aspect-ratio: 1; }
+.af-4-3 { aspect-ratio: 4 / 3; }
+.seg-btn.aspect { padding: 6px 11px; }
+.seg-btn.aspect .lbl { font-variant-numeric: tabular-nums; letter-spacing: .3px; }
+
+/* —— 间隔分组：档位 + 时长读数（自动/手动）—— */
+.seg-btn.pace { padding: 7px 10px; font-variant-numeric: tabular-nums; letter-spacing: 0; min-width: 44px; justify-content: center; }
+.pace-hint {
+  font-size: 10px; letter-spacing: .8px; color: #6f9cba;
+  padding-left: 12px; white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.pace-hint.locked { color: #ffcf7a; } /* 手动锁定时以暖色提示，避免与"自动"混淆 */
+
+/* —— 导出状态文字（流式布局下独占一行、居中）—— */
 .exp {
-  grid-column: 1 / -1; color: #9fe6c4; font-size: 12px; text-align: center;
+  flex-basis: 100%; color: #9fe6c4; font-size: 12px; text-align: center;
   letter-spacing: 0.3px; margin-top: -2px;
 }
 .fade-enter-active, .fade-leave-active { transition: opacity var(--t-fast) var(--ease); }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 
-/* —— 响应式 —— */
-/* 中屏 / 竖屏（<1180px）：单列堆叠，每组一行，段内可换行——彻底避免横向溢出 */
+/* —— 响应式：仅做字号/内边距微调，布局本身由 flex-wrap 自适应，无断点跳变 —— */
 @media (max-width: 1180px) {
-  .dock {
-    grid-template-columns: minmax(0, 1fr); gap: 7px;
-    bottom: var(--space-4); max-width: 94vw; padding: 10px 12px 11px;
-  }
-  .group { align-items: stretch; }
+  .dock { bottom: var(--space-4); max-width: 94vw; padding: 10px 12px 11px; }
   .group-tag { padding-left: 10px; letter-spacing: 2px; }
-  .seg { flex-wrap: wrap; justify-content: center; }
   .seg-btn { padding: 6px 10px; font-size: 12.5px; }
-  .exp { font-size: 11px; text-align: center; }
+  .exp { font-size: 11px; }
 }
 @media (max-width: 720px) {
   .dock {
-    bottom: var(--space-3); padding: 8px 10px 9px; gap: 6px;
+    bottom: var(--space-3); padding: 8px 10px 9px; gap: 6px 10px;
     border-radius: var(--radius-md); max-width: 95vw;
     clip-path: polygon(10px 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%, 0 10px);
   }
@@ -351,17 +421,22 @@ function exportWebM() {
   .seg-btn { padding: 5px 8px; font-size: 11.5px; gap: 4px; letter-spacing: 0.3px; }
   .seg-btn .ico { font-size: 11px; }
   .geo { width: 14px; height: 14px; }
+  .aframe { height: 12px; }
+  .af-9-16 { height: 15px; }
   .group-tag { font-size: 8px; letter-spacing: 2px; padding-left: 8px; }
+  .pace-hint { font-size: 9px; padding-left: 9px; }
   .exp { font-size: 10.5px; }
 }
 @media (max-width: 480px) {
   /* 窄屏：进一步压缩，去掉视图圆点、形状只留图标 */
-  .dock { gap: 5px; padding: 8px 9px 9px; max-width: 96vw; }
+  .dock { gap: 5px 9px; padding: 8px 9px 9px; max-width: 96vw; }
   .group-tag { padding-left: 9px; font-size: 7.5px; letter-spacing: 1.5px; }
   .seg { padding: 2px; gap: 2px; }
   .seg-btn { padding: 4px 7px; font-size: 11px; }
   .seg-btn .dot { display: none; }        /* 省宽：去掉视图小圆点 */
   .seg-btn.shape .lbl { display: none; }  /* 形状按钮只留图标 */
+  .seg-btn.aspect .lbl { display: none; } /* 比例只留等比小窗图标 */
   .geo { width: 16px; height: 16px; }
+  .dock .pace-hint { display: none; }     /* 极窄省略时长读数 */
 }
 </style>

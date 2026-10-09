@@ -2,6 +2,35 @@
 // 本文件为「纯逻辑」：仅依赖浏览器与 Node 都全局可用的
 //   TextEncoder / TextDecoder / btoa / atob
 // 不 import 任何 DOM / Node 专属模块，确保浏览器与 Node 端均可直接复用。
+//
+// 【双格式支持】本模块同时接受两种输入：
+//   ① 内部格式（旧）：{ title, views:[{key,label,unit,items:[{name,value}]}] }
+//   ② v2 数据模板：  { schemaVersion, dataset, entity, metrics[], entities[] }
+//   v2 由 adapt.js 适配为「类内部格式」后，再走本模块统一规范化——
+//   因此校验 / 截断 / 去重 / 至少一条 等规则只有一份实现，两种格式行为一致。
+import { adaptV2, looksLikeV2 } from './adapt.js';
+import { HUINING_V2 } from '../data/huining-v2.js';
+import {
+  DEFAULT_BAR_INTERVAL_MS,
+  INTERVAL_MIN,
+  INTERVAL_MAX,
+  DEFAULT_ASPECT,
+  normalizeAspect,
+  deriveDuration,
+} from './video.js';
+
+// 重新导出视频规格相关能力，让消费方只需 import config.js 一处即可拿到全套
+export {
+  deriveDuration,
+  intervalFromDuration,
+  pixelSizeFor,
+  ratioOf,
+  normalizeAspect,
+  ASPECTS,
+  ASPECT_KEYS,
+  DEFAULT_ASPECT,
+  DEFAULT_BAR_INTERVAL_MS,
+} from './video.js';
 
 // ───────────────────────────────────────────────────────────
 // 2.0 形状类型（shape）
@@ -34,10 +63,14 @@ export function normalizeShape(v) {
 const DEFAULTS = {
   title: '',
   subtitle: '',
+  source: '',
+  notes: [],
   theme: 'tech',
   highlightLabel: '重点',
   revealRatio: 0.72,
   durationMs: 7200,
+  barIntervalMs: DEFAULT_BAR_INTERVAL_MS,
+  aspect: DEFAULT_ASPECT,
   defaultShape: DEFAULT_SHAPE,
 };
 
@@ -54,19 +87,38 @@ export function truncateName(name, max = NAME_MAX) {
 }
 
 // ───────────────────────────────────────────────────────────
-// 2.2 normalizeConfig(raw)
+// 2.2 normalizeConfig(raw, opts)
 //   补齐默认值、过滤非法项、保证每个 view 至少 1 条 items。
 //   尽力而为，绝不抛异常；返回 { config, warns }。
+//   【双格式】若形如 v2 数据模板，先经 adaptV2 适配为内部格式再走下面的规范化，
+//   这样两套输入共享同一份校验逻辑（截断/去重/归零/至少一条）。
+//   opts（透传给 adaptV2）：
+//     · includeDisabled    纳入 enabled:false 的指标（CLI --include-disabled）
+//     · onlyDefaultVisible 只保留 defaultVisible!==false 的指标
+//     · highlightEntityId  覆盖模板内的高亮主角 id（URL ?highlight=）
 // ───────────────────────────────────────────────────────────
-export function normalizeConfig(raw) {
+export function normalizeConfig(raw, opts = {}) {
+  if (looksLikeV2(raw)) {
+    const adapted = adaptV2(raw, opts);            // v2 → 类内部格式
+    const r = normalizeConfig(adapted.config, opts); // 复用下面的既有规范化
+    return { config: r.config, warns: [...adapted.warns, ...r.warns] };
+  }
+
   const warns = [];
   const out = {
     title: '',
     subtitle: '',
+    source: '',
+    notes: [],
     theme: 'tech',
     highlightLabel: '重点',
     revealRatio: 0.72,
     durationMs: 7200,
+    barIntervalMs: DEFAULT_BAR_INTERVAL_MS,
+    // durationExplicit 是「内部标记」：表示 durationMs 由用户显式指定，
+    // 因此不被 barIntervalMs 推导覆盖（保持老配置的行为完全不变）。
+    _durationExplicit: false,
+    aspect: DEFAULT_ASPECT,
     defaultShape: DEFAULT_SHAPE,
     views: [],
   };
@@ -79,6 +131,18 @@ export function normalizeConfig(raw) {
   // —— 顶层字符串字段 ——
   out.title = typeof raw.title === 'string' ? raw.title : DEFAULTS.title;
   out.subtitle = typeof raw.subtitle === 'string' ? raw.subtitle : DEFAULTS.subtitle;
+  // source（来源）：与 subtitle 分开保留，供信息面板独立编辑；缺失时回退 ''
+  out.source = typeof raw.source === 'string' ? raw.source : DEFAULTS.source;
+  // notes（备注）：字符串数组，过滤空项；非数组回退空数组。
+  // 单个字符串也视为非法（notes 语义是多条备注，用数组表达；单条请写 ['...']）。
+  if (Array.isArray(raw.notes)) {
+    out.notes = raw.notes
+      .map((n) => (typeof n === 'string' ? n : n == null ? '' : String(n)))
+      .map((s) => s.trim())
+      .filter(Boolean);
+  } else if (raw.notes != null) {
+    warns.push('notes 不是数组，已忽略（单条备注请写为 ["..."]）');
+  }
   // theme：字符串（主题名）或对象（内联主题）均可，其它回退默认
   out.theme =
     typeof raw.theme === 'string' || (raw.theme && typeof raw.theme === 'object')
@@ -96,12 +160,37 @@ export function normalizeConfig(raw) {
   out.revealRatio = Math.min(1, Math.max(0.05, rr));
 
   // —— durationMs（正数）——
+  //   v2.6 起支持「由 barIntervalMs 自动推导总时长」：
+  //     · 显式给了 durationMs  → 以它为准（老配置行为不变，_durationExplicit=true）；
+  //     · 未给 durationMs 但给了 barIntervalMs → 由柱体数量推导；
+  //     · 两者都未给 → 保持默认 7200（与旧默认一致）。
+  //   推导在统计完 views 后进行（需要柱体数量），此处只先解析用户显式值。
   let dm = Number(raw.durationMs);
-  if (!Number.isFinite(dm) || dm <= 0) {
-    warns.push(`durationMs 非法(${raw.durationMs})，回退默认 7200`);
-    dm = DEFAULTS.durationMs;
+  const dmGiven = Number.isFinite(dm) && dm > 0;
+  if (raw.durationMs != null && !dmGiven) {
+    warns.push(`durationMs 非法(${raw.durationMs})，将按间隔推导`);
   }
-  out.durationMs = Math.round(dm);
+  if (dmGiven) {
+    out.durationMs = Math.round(dm);
+    out._durationExplicit = true;
+  }
+
+  // —— barIntervalMs（每根柱子弹出间隔，clamp 到 [0.2s, 20s]）——
+  let bi = Number(raw.barIntervalMs);
+  if (!Number.isFinite(bi) || bi <= 0) {
+    if (raw.barIntervalMs != null) {
+      warns.push(`barIntervalMs 非法(${raw.barIntervalMs})，回退默认 ${DEFAULT_BAR_INTERVAL_MS}`);
+    }
+    bi = DEFAULTS.barIntervalMs;
+  }
+  out.barIntervalMs = Math.round(Math.min(INTERVAL_MAX, Math.max(INTERVAL_MIN, bi)));
+
+  // —— aspect（画幅比例，预览与导出共用）——
+  if (raw.aspect != null) {
+    const asp = normalizeAspect(raw.aspect);
+    if (asp) out.aspect = asp;
+    else warns.push(`aspect 非法(${raw.aspect})，回退默认 ${DEFAULT_ASPECT}`);
+  }
 
   // —— defaultShape（顶层默认形状；视图未指定 shape 时回退到它）——
   if (raw.defaultShape != null) {
@@ -190,7 +279,12 @@ export function normalizeConfig(raw) {
       if (display !== name) {
         warns.push(`views[${vi}].items[${ii}](${name}) 名称过长，已截断为「${display}」`);
       }
-      view.items.push({ name: display, value, highlight: it.highlight === true });
+      // ⑦ 保留可选的 `_id`（v2 适配器写入的实体 id）：供 ?highlight= 按 id 精确匹配，
+      //    旧格式通常没有该字段 → 不写入，保持 items 结构向后兼容。
+      //    注意：它不是渲染契约字段，仅作运行时匹配标识，不影响任何图表行为。
+      const item = { name: display, value, highlight: it.highlight === true };
+      if (typeof it._id === 'string' && it._id) item._id = it._id;
+      view.items.push(item);
     });
 
     // 保证每个 view 至少 1 条 items
@@ -204,6 +298,13 @@ export function normalizeConfig(raw) {
   out.views = views;
   if (out.views.length === 0) {
     warns.push('配置最终无任何有效视图，渲染将无内容');
+  }
+
+  // —— 总时长收尾：未显式指定时，按「柱体数量 × 每根间隔 / 揭示占比」推导 ——
+  //   柱体数量取所有视图中最大者（多视图时以最"长"的一屏为准，保证任何视图都播得完）。
+  if (!out._durationExplicit) {
+    const maxItems = out.views.reduce((m, v) => Math.max(m, v.items.length), 0) || 1;
+    out.durationMs = deriveDuration(maxItems, out.barIntervalMs, out.revealRatio);
   }
 
   return { config: out, warns };
@@ -233,439 +334,15 @@ export function decodeConfig(str) {
 }
 
 // ───────────────────────────────────────────────────────────
-// 2.4 DEFAULT_CONFIG：会宁县多视图（area/pop/elev/red）
-//   等价于原 dataset.js 的 DEFAULT_DATA + METRICS；会师镇 highlight:true
+// 2.4 DEFAULT_CONFIG：会宁县乡镇数据集（v2 数据模板驱动）
+//   数据源为 src/data/huining-v2.js（v2 schema 纯字面量），此处经 adaptV2 适配为
+//   内部格式——**不再手工维护一份等价的多视图字面量**，避免两处数据漂移。
+//   会师镇为高亮主角（dataset.highlightEntityId = 'huishi'）。
+//   注意：config.js 是纯逻辑模块（不能 fs 读文件），故数据必须以 .js 字面量形式 import。
+//   ★ v2.6：这里必须再过一道 normalizeConfig（而非直接用 adaptV2 的裸输出），
+//     否则 durationMs / aspect 等"规范化阶段才补齐或推导"的字段会是 undefined。
 // ───────────────────────────────────────────────────────────
-export const DEFAULT_CONFIG = {
-  title: "会宁县乡镇数据 · 3D 对比",
-  subtitle: "数据来源：会宁县人民政府官网乡镇概况 · 第七次全国人口普查 · 2025 会宁县统计公报",
-  theme: "tech",
-  revealRatio: 0.72,
-  durationMs: 9000,
-  views: [
-    {
-      key: "area",
-      label: "行政区域面积",
-      short: "面积",
-      unit: "km²",
-      fixed: 0,
-      items: [
-        {
-          name: "会师镇",
-          value: 204,
-          highlight: true
-        },
-        {
-          name: "郭城驿镇",
-          value: 329,
-          highlight: false
-        },
-        {
-          name: "河畔镇",
-          value: 243,
-          highlight: false
-        },
-        {
-          name: "头寨子镇",
-          value: 474,
-          highlight: false
-        },
-        {
-          name: "太平店镇",
-          value: 140,
-          highlight: false
-        },
-        {
-          name: "翟家所镇",
-          value: 182,
-          highlight: false
-        },
-        {
-          name: "老君坡镇",
-          value: 138,
-          highlight: false
-        },
-        {
-          name: "中川镇",
-          value: 138,
-          highlight: false
-        },
-        {
-          name: "汉家岔镇",
-          value: 388,
-          highlight: false
-        },
-        {
-          name: "新庄塬镇",
-          value: 332,
-          highlight: false
-        },
-        {
-          name: "四房吴镇",
-          value: 259,
-          highlight: false
-        },
-        {
-          name: "土门岘镇",
-          value: 185,
-          highlight: false
-        },
-        {
-          name: "平头川镇",
-          value: 138,
-          highlight: false
-        },
-        {
-          name: "新塬镇",
-          value: 287,
-          highlight: false
-        }
-      ]
-    },
-    {
-      key: "pop",
-      label: "常住人口",
-      short: "人口",
-      unit: "万人",
-      fixed: 2,
-      items: [
-        {
-          name: "会师镇",
-          value: 11.41,
-          highlight: true
-        },
-        {
-          name: "郭城驿镇",
-          value: 2.8,
-          highlight: false
-        },
-        {
-          name: "河畔镇",
-          value: 2.02,
-          highlight: false
-        },
-        {
-          name: "头寨子镇",
-          value: 1.65,
-          highlight: false
-        },
-        {
-          name: "甘沟驿镇",
-          value: 1.18,
-          highlight: false
-        },
-        {
-          name: "太平店镇",
-          value: 1.17,
-          highlight: false
-        },
-        {
-          name: "翟家所镇",
-          value: 1.02,
-          highlight: false
-        },
-        {
-          name: "老君坡镇",
-          value: 1.15,
-          highlight: false
-        },
-        {
-          name: "中川镇",
-          value: 0.94,
-          highlight: false
-        },
-        {
-          name: "汉家岔镇",
-          value: 0.98,
-          highlight: false
-        },
-        {
-          name: "新庄塬镇",
-          value: 0.54,
-          highlight: false
-        },
-        {
-          name: "四房吴镇",
-          value: 0.86,
-          highlight: false
-        },
-        {
-          name: "土门岘镇",
-          value: 0.43,
-          highlight: false
-        },
-        {
-          name: "平头川镇",
-          value: 0.65,
-          highlight: false
-        },
-        {
-          name: "新塬镇",
-          value: 0.72,
-          highlight: false
-        },
-        {
-          name: "侯家川镇",
-          value: 0.68,
-          highlight: false
-        },
-        {
-          name: "柴家门镇",
-          value: 2.09,
-          highlight: false
-        },
-        {
-          name: "刘家寨子镇",
-          value: 0.86,
-          highlight: false
-        },
-        {
-          name: "白草塬镇",
-          value: 1.36,
-          highlight: false
-        },
-        {
-          name: "大沟镇",
-          value: 1.03,
-          highlight: false
-        },
-        {
-          name: "丁家沟镇",
-          value: 1.05,
-          highlight: false
-        },
-        {
-          name: "杨崖集镇",
-          value: 1.09,
-          highlight: false
-        },
-        {
-          name: "韩家集镇",
-          value: 0.7,
-          highlight: false
-        },
-        {
-          name: "土高山乡",
-          value: 0.41,
-          highlight: false
-        },
-        {
-          name: "新添堡回族乡",
-          value: 0.86,
-          highlight: false
-        },
-        {
-          name: "党家岘乡",
-          value: 1.03,
-          highlight: false
-        },
-        {
-          name: "八里湾乡",
-          value: 0.82,
-          highlight: false
-        },
-        {
-          name: "草滩镇",
-          value: 0.65,
-          highlight: false
-        }
-      ]
-    },
-    {
-      key: "elev",
-      label: "平均海拔",
-      short: "海拔",
-      unit: "m",
-      fixed: 0,
-      items: [
-        {
-          name: "会师镇",
-          value: 1950,
-          highlight: true
-        },
-        {
-          name: "河畔镇",
-          value: 1500,
-          highlight: false
-        },
-        {
-          name: "头寨子镇",
-          value: 1700,
-          highlight: false
-        },
-        {
-          name: "太平店镇",
-          value: 1865,
-          highlight: false
-        },
-        {
-          name: "老君坡镇",
-          value: 2073,
-          highlight: false
-        },
-        {
-          name: "新庄塬镇",
-          value: 2000,
-          highlight: false
-        },
-        {
-          name: "四房吴镇",
-          value: 1900,
-          highlight: false
-        }
-      ]
-    },
-    {
-      key: "red",
-      label: "红色资源指数",
-      short: "红色",
-      unit: "",
-      fixed: 0,
-      items: [
-        {
-          name: "会师镇",
-          value: 100,
-          highlight: true
-        },
-        {
-          name: "郭城驿镇",
-          value: 34,
-          highlight: false
-        },
-        {
-          name: "河畔镇",
-          value: 42,
-          highlight: false
-        },
-        {
-          name: "头寨子镇",
-          value: 22,
-          highlight: false
-        },
-        {
-          name: "甘沟驿镇",
-          value: 16,
-          highlight: false
-        },
-        {
-          name: "太平店镇",
-          value: 20,
-          highlight: false
-        },
-        {
-          name: "翟家所镇",
-          value: 36,
-          highlight: false
-        },
-        {
-          name: "老君坡镇",
-          value: 14,
-          highlight: false
-        },
-        {
-          name: "中川镇",
-          value: 30,
-          highlight: false
-        },
-        {
-          name: "汉家岔镇",
-          value: 12,
-          highlight: false
-        },
-        {
-          name: "新庄塬镇",
-          value: 10,
-          highlight: false
-        },
-        {
-          name: "四房吴镇",
-          value: 12,
-          highlight: false
-        },
-        {
-          name: "土门岘镇",
-          value: 10,
-          highlight: false
-        },
-        {
-          name: "平头川镇",
-          value: 8,
-          highlight: false
-        },
-        {
-          name: "新塬镇",
-          value: 8,
-          highlight: false
-        },
-        {
-          name: "侯家川镇",
-          value: 9,
-          highlight: false
-        },
-        {
-          name: "柴家门镇",
-          value: 18,
-          highlight: false
-        },
-        {
-          name: "刘家寨子镇",
-          value: 8,
-          highlight: false
-        },
-        {
-          name: "白草塬镇",
-          value: 7,
-          highlight: false
-        },
-        {
-          name: "大沟镇",
-          value: 8,
-          highlight: false
-        },
-        {
-          name: "丁家沟镇",
-          value: 7,
-          highlight: false
-        },
-        {
-          name: "杨崖集镇",
-          value: 7,
-          highlight: false
-        },
-        {
-          name: "韩家集镇",
-          value: 6,
-          highlight: false
-        },
-        {
-          name: "土高山乡",
-          value: 6,
-          highlight: false
-        },
-        {
-          name: "新添堡回族乡",
-          value: 6,
-          highlight: false
-        },
-        {
-          name: "党家岘乡",
-          value: 7,
-          highlight: false
-        },
-        {
-          name: "八里湾乡",
-          value: 6,
-          highlight: false
-        },
-        {
-          name: "草滩镇",
-          value: 5,
-          highlight: false
-        }
-      ]
-    }
-  ]
-};
+export const DEFAULT_CONFIG = normalizeConfig(HUINING_V2).config;
 
 // ───────────────────────────────────────────────────────────
 // 2.5 SAMPLE_CONFIGS：内置示例，便于浏览器里演示通用性

@@ -156,6 +156,89 @@ async function main() {
     check('形状·连续切换 5 种形状页面无未捕获异常', shapeSwitchErrors.length === 0,
       shapeSwitchErrors.join(' | '));
 
+    // ── 1c) v2 数据模板直出（端到端）──
+    // 用户提供的规范模板（schemaVersion/dataset/entity/metrics[]/entities[]）应当
+    // 无需任何转换即可被 ?cfg= 直接消费：自动识别 → 适配 → 渲染。
+    // 这里把 samples/huining-v2.json（真实 v2 模板）编码后直传，断言：
+    //   ① 页面加载无未捕获异常；
+    //   ② 生成的视图数 = 模板中 enabled!==false 的指标数；
+    //   ③ 首帧与全景帧均有内容（非空白）；
+    //   ④ dataset.name 作为标题生效（页面标题文本命中）；
+    //   ⑤ highlightEntityId 主角项被标记高亮。
+    const v2Raw = JSON.parse(fs.readFileSync(path.join(root, 'samples/huining-v2.json'), 'utf8'));
+    const v2B64 = encodeConfig(v2Raw);
+    const v2EnabledCount = (Array.isArray(v2Raw.metrics) ? v2Raw.metrics : [])
+      .filter((m) => m && m.enabled !== false).length;
+
+    const v2Probe = await withPage(async (page) => {
+      const errors = [];
+      page.on('pageerror', (e) => errors.push(String(e && e.message ? e.message : e)));
+      await page.goto(`${srv.base}/?t=2&cfg=${v2B64}&debug=1`, { waitUntil: 'load' });
+      await page.waitForFunction(() => document.body.dataset.ready === '1', { timeout: 30000 });
+      const info = await page.evaluate(() => {
+        const c = window.__brConfig || {};
+        const views = Array.isArray(c.views) ? c.views : [];
+        return {
+          viewCount: views.length,
+          keys: views.map((x) => x.key),
+          title: c.title || '',
+          subtitle: c.subtitle || '',
+          highlighted: views.reduce((n, v) => n + (v.highlighted ? v.highlighted.length : 0), 0),
+          highlightedNames: views.flatMap((v) => v.highlighted || []),
+        };
+      });
+      return { ...info, errors };
+    });
+    check('v2 直出·页面无未捕获异常', v2Probe.errors.length === 0,
+      v2Probe.errors[0] || '0 error');
+    check(`v2 直出·自动识别并生成 ${v2EnabledCount} 个视图（enabled!==false）`,
+      v2Probe.viewCount === v2EnabledCount,
+      `views=${v2Probe.viewCount} keys=${v2Probe.keys.join(',')}`);
+    check('v2 直出·标题取自 dataset.name',
+      !!v2Raw.dataset?.name && v2Probe.title === v2Raw.dataset.name, `title="${v2Probe.title}"`);
+    check('v2 直出·副标题含 dataset.source',
+      !v2Raw.dataset?.source || v2Probe.subtitle.includes(v2Raw.dataset.source),
+      `subtitle="${v2Probe.subtitle}"`);
+
+    // v2 首帧 / 全景帧均非空白（走真实渲染路径）
+    const v2Key = v2Probe.keys[0];
+    if (v2Key) {
+      const v2First = await shoot(0.0, 'v2_first.png', `&view=${v2Key}`);
+      const aV2First = analyze(v2First, { topSkip: 110 });
+      const v2Pano = await shoot(1, 'v2_pano.png', `&view=${v2Key}`);
+      const aV2Pano = analyze(v2Pano, { topSkip: 110, bottomSkip: 60, xSkip: 100 });
+      check('v2 直出·全景帧内容非空白', aV2Pano.cnt >= 40000, `cnt=${aV2Pano.cnt}`);
+      check('v2 直出·全景帧横向铺开（宽占比 ≥62%）', aV2Pano.w >= 0.62,
+        `w=${(aV2Pano.w * 100).toFixed(1)}%`);
+      check('v2 直出·首帧少于全景帧（逐条出现仍在工作）', aV2Pano.cnt > aV2First.cnt,
+        `${aV2First.cnt} → ${aV2Pano.cnt}`);
+
+      // highlightEntityId 主角高亮：模板 huining-v2 指定会师镇
+      if (v2Raw.dataset?.highlightEntityId) {
+        check('v2 直出·highlightEntityId 主角项被标记高亮', v2Probe.highlighted >= 1,
+          `highlighted=${v2Probe.highlighted} [${v2Probe.highlightedNames.join(',')}]`);
+      }
+    } else {
+      check('v2 直出·至少生成一个可渲染视图', false, '无视图');
+    }
+
+    // v2 + 旧格式隔离：旧格式（有 views[]）不会被误判为 v2（回归 ?cfg= 契约）
+    const legacyProbe = await withPage(async (page) => {
+      const errors = [];
+      page.on('pageerror', (e) => errors.push(String(e && e.message ? e.message : e)));
+      await page.goto(`${srv.base}${url(0.72, `&view=${cfg.views[0].key}&debug=1`)}`, { waitUntil: 'load' });
+      await page.waitForFunction(() => document.body.dataset.ready === '1', { timeout: 30000 });
+      return page.evaluate(() => ({
+        hasFrame: !!window.__brFrame,
+        title: (window.__brConfig && window.__brConfig.title) || '',
+        viewCount: (window.__brConfig && window.__brConfig.views.length) || 0,
+      })).then((r) => ({ ...r, errors }));
+    });
+    check('v2 隔离·旧格式 ?cfg= 契约不受影响（正常出图）',
+      legacyProbe.errors.length === 0 && legacyProbe.hasFrame, '');
+    check('v2 隔离·旧格式视图数保持原样',
+      legacyProbe.viewCount === cfg.views.length, `${legacyProbe.viewCount}/${cfg.views.length}`);
+
     // ── 2) 由低到高逐条出现（亮柱像素随 t 单调增）──
     const ts = [0.0, 0.18, 0.36, 0.54, 0.72];
     const counts = [];

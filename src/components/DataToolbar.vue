@@ -5,6 +5,7 @@
     <input ref="file" id="file" type="file" accept=".csv,text/csv" hidden @change="onFile" />
     <button @click="exportCSV()" title="导出 CSV"><span class="ico">⬇</span><span class="label">导出</span></button>
     <button @click="$emit('open-table')" title="打开数据表"><span class="ico">✎</span><span class="label">数据表</span></button>
+    <button @click="$emit('open-info')" title="编辑标题 / 来源 / 备注"><span class="ico">ⓘ</span><span class="label">信息</span></button>
     <span class="msg" :class="{ show: message }">{{ message }}</span>
   </div>
 </template>
@@ -14,7 +15,7 @@ import { ref } from 'vue';
 import { useDataset } from '../composables/useDataset.js';
 
 defineProps({ capture: { type: Boolean, default: false } });
-defineEmits(['open-table']);
+defineEmits(['open-table', 'open-info']);
 const { downloadTemplate, exportCSV, importCSV, message } = useDataset();
 
 const file = ref(null);

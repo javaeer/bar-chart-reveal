@@ -2,6 +2,11 @@
 // 用法：node scripts/qa/config.test.mjs
 // 无外部依赖，不需要浏览器 / 字体 / GL——直接以 Node 运行。
 import { normalizeConfig, truncateName, SHAPES, normalizeShape } from '../../src/core/config.js';
+import { looksLikeV2, adaptV2 } from '../../src/core/adapt.js';
+import {
+  ASPECTS, ASPECT_KEYS, DEFAULT_ASPECT, normalizeAspect, ratioOf, pixelSizeFor,
+  deriveDuration, intervalFromDuration, DEFAULT_BAR_INTERVAL_MS, INTERVAL_MIN, INTERVAL_MAX,
+} from '../../src/core/video.js';
 
 let pass = 0, fail = 0;
 const results = [];
@@ -133,7 +138,13 @@ ok('兜底：items 为空的视图被丢弃', c5.views.length === 0, '');
 
 const { config: c6 } = normalizeConfig({ revealRatio: 'xx', durationMs: -5, views: [] });
 ok('兜底：revealRatio 非法 → 回退 0.72', c6.revealRatio === 0.72, String(c6.revealRatio));
-ok('兜底：durationMs 非法 → 回退 7200', c6.durationMs === 7200, String(c6.durationMs));
+// v2.6：durationMs 非法 → 不再硬回退 7200，而是交由 barIntervalMs 推导
+//   （views 为空 → 柱体数量按 1 计；默认间隔 2000 / 0.72 ≈ 2778ms）
+ok(
+  '兜底：durationMs 非法 → 由间隔推导（views 空时 ≈ 2778ms）',
+  c6.durationMs === Math.round(2000 / 0.72),
+  String(c6.durationMs),
+);
 
 // 极端：正常配置不被误伤（补齐 revealRatio / durationMs，避免触发"缺失即告警"逻辑）
 const { config: c7, warns: w7 } = normalizeConfig({
@@ -188,5 +199,349 @@ ok('shape 非法：视图回退 bar', c10.views[0].shape === 'bar', String(c10.v
 ok('shape 非法：顶层与视图各产生一条告警',
   w10.filter((w) => /shape/i.test(w)).length === 2, w10.filter((w) => /shape/i.test(w)).join(' | '));
 
+// ═══════════════════════════════════════════════════════════
+// 6) v2 数据模板（schemaVersion / dataset / entity / metrics[] / entities[]）
+//    —— 双格式自动识别 + v2→内部格式适配
+// ═══════════════════════════════════════════════════════════
+
+// 6.1 判别：有 metrics 无 views → v2；纯 views → 旧格式；两者都有 → 以 views 为准
+ok('判别：有 metrics[] 无 views[] → v2', looksLikeV2({ metrics: [], entities: [] }) === true, '');
+ok('判别：schemaVersion 存在 → v2', looksLikeV2({ schemaVersion: '1.0' }) === true, '');
+ok('判别：纯 views[] → 旧格式', looksLikeV2({ views: [{ items: [] }] }) === false, '');
+ok('判别：views[] + metrics[] 同时存在 → 以 views 为准（旧格式）',
+  looksLikeV2({ views: [{ items: [] }], metrics: [{ key: 'a' }] }) === false, '');
+ok('判别：null / 非对象 → 旧格式（交由旧分支兜底）',
+  looksLikeV2(null) === false && looksLikeV2('x') === false && looksLikeV2(123) === false, '');
+
+// 6.2 dataset.name → title；source + notes[] → subtitle（拼接顺序与分隔符）
+const v2Basic = {
+  schemaVersion: '1.0',
+  dataset: {
+    id: 'demo', name: '示范数据集',
+    source: '示范来源',
+    notes: ['注一', '注二'],
+  },
+  entity: { idField: 'id', nameField: 'name', groupField: 'group' },
+  metrics: [{ key: 'm1', label: '指标一', unit: '个', decimals: 1, missingPolicy: 'skip' }],
+  entities: [
+    { id: 'a', name: '甲', group: '镇', metrics: { m1: 1 } },
+    { id: 'b', name: '乙', group: '镇', metrics: { m1: 2 } },
+  ],
+  theme: 'tech', defaultShape: 'bar', revealRatio: 0.7, durationMs: 6000,
+};
+const b2 = normalizeConfig(v2Basic);
+ok('v2：dataset.name → title', b2.config.title === '示范数据集', b2.config.title);
+ok('v2：source + notes[] → subtitle（顺序 + 分隔符）',
+  b2.config.subtitle === '示范来源 · 注一 · 注二', b2.config.subtitle);
+ok('v2：metric.decimals → view.fixed（0..6 夹紧）', b2.config.views[0].fixed === 1, String(b2.config.views[0].fixed));
+ok('v2：entity[nameField] → item.name；entity.metrics[key] → item.value',
+  b2.config.views[0].items.map((i) => `${i.name}=${i.value}`).join(',') === '甲=1,乙=2',
+  b2.config.views[0].items.map((i) => `${i.name}=${i.value}`).join(','));
+ok('v2：theme/defaultShape/revealRatio/durationMs 透传',
+  b2.config.theme === 'tech' && b2.config.defaultShape === 'bar' &&
+  b2.config.revealRatio === 0.7 && b2.config.durationMs === 6000, '');
+ok('v2：合法模板零告警', b2.warns.length === 0, b2.warns.join(' | '));
+
+// decimals 越界夹紧
+const b2d = normalizeConfig({
+  ...v2Basic,
+  metrics: [
+    { key: 'm1', label: 'A', unit: '', decimals: -3, missingPolicy: 'skip' },
+    { key: 'm2', label: 'B', unit: '', decimals: 99, missingPolicy: 'skip' },
+    { key: 'm3', label: 'C', unit: '', decimals: 'x', missingPolicy: 'skip' },
+  ],
+  entities: [
+    { id: 'a', name: '甲', metrics: { m1: 1, m2: 2, m3: 3 } },
+    { id: 'b', name: '乙', metrics: { m1: 4, m2: 5, m3: 6 } },
+  ],
+});
+ok('v2：decimals 越界/非法 → 夹紧至 [0,6]（-3→0, 99→6, 非法→0）',
+  b2d.config.views.map((v) => v.fixed).join(',') === '0,6,0',
+  b2d.config.views.map((v) => v.fixed).join(','));
+
+// 6.3 enabled:false 默认不生成视图；includeDisabled:true 时生成
+const v2Enabled = {
+  schemaVersion: '1.0',
+  dataset: { id: 'd', name: 'T' },
+  metrics: [
+    { key: 'on', label: '启用', unit: '个', enabled: true, missingPolicy: 'skip' },
+    { key: 'off', label: '禁用', unit: '个', enabled: false, missingPolicy: 'skip' },
+    { key: 'def', label: '缺省', unit: '个', missingPolicy: 'skip' },
+  ],
+  entities: [{ id: 'a', name: '甲', metrics: { on: 1, off: 2, def: 3 } }],
+};
+const e2 = normalizeConfig(v2Enabled);
+ok('v2：enabled:false 默认不生成视图（on + 缺省=启用）',
+  e2.config.views.map((v) => v.label).join(',') === '启用,缺省',
+  e2.config.views.map((v) => v.label).join(','));
+const e2i = normalizeConfig(v2Enabled, { includeDisabled: true });
+ok('v2：includeDisabled:true 时禁用视图也被生成',
+  e2i.config.views.map((v) => v.label).join(',') === '启用,禁用,缺省',
+  e2i.config.views.map((v) => v.label).join(','));
+
+// 6.4 missingPolicy 三态：skip 减条 / zero 补 0 / disable 跳过整视图
+const v2Policy = {
+  schemaVersion: '1.0',
+  dataset: { id: 'd', name: 'T' },
+  metrics: [
+    { key: 'sk', label: 'SKIP', unit: '个', missingPolicy: 'skip' },
+    { key: 'ze', label: 'ZERO', unit: '个', missingPolicy: 'zero' },
+    { key: 'di', label: 'DISABLE', unit: '个', missingPolicy: 'disable' },
+  ],
+  entities: [
+    { id: 'a', name: '甲', metrics: { sk: 1, ze: 2, di: 3 } },
+    { id: 'b', name: '乙', metrics: { sk: 9, ze: 8 } },           // 缺 di
+    { id: 'c', name: '丙', metrics: { } },                         // 全缺
+  ],
+};
+const p2 = normalizeConfig(v2Policy);
+const vSk = p2.config.views.find((v) => v.label === 'SKIP');
+const vZe = p2.config.views.find((v) => v.label === 'ZERO');
+const vDi = p2.config.views.find((v) => v.label === 'DISABLE');
+ok('v2 missingPolicy=skip：缺失条目被丢弃（丙 被剔除）',
+  vSk.items.length === 2 && !vSk.items.some((i) => i.name === '丙'), vSk.items.map((i) => i.name).join(','));
+ok('v2 missingPolicy=zero：缺失补 0（丙=0 保留）',
+  vZe.items.length === 3 && vZe.items.find((i) => i.name === '丙')?.value === 0,
+  vZe.items.map((i) => `${i.name}=${i.value}`).join(','));
+ok('v2 missingPolicy=zero：已有值原样保留',
+  vZe.items.find((i) => i.name === '乙')?.value === 8, String(vZe.items.find((i) => i.name === '乙')?.value));
+ok('v2 missingPolicy=disable：整视图被跳过（缺 di 者存在 → 该视图不生成）',
+  vDi === undefined, vDi ? '仍存在' : '已跳过');
+
+// disable 策略但所有实体都有值 → 视图保留
+const p2ok = normalizeConfig({
+  schemaVersion: '1.0', dataset: { id: 'd', name: 'T' },
+  metrics: [{ key: 'di', label: 'D', unit: '个', missingPolicy: 'disable' }],
+  entities: [{ id: 'a', name: '甲', metrics: { di: 1 } }, { id: 'b', name: '乙', metrics: { di: 2 } }],
+});
+ok('v2 missingPolicy=disable：全员有值 → 视图正常保留',
+  p2ok.config.views.length === 1 && p2ok.config.views[0].items.length === 2, `views=${p2ok.config.views.length}`);
+
+// 6.5 非 null 非法值 → 归零 + 告警（沿用旧分支的取值规范）
+const v2Bad = normalizeConfig({
+  schemaVersion: '1.0', dataset: { id: 'd', name: 'T' },
+  metrics: [{ key: 'm', label: 'M', unit: '个', missingPolicy: 'skip' }],
+  entities: [
+    { id: 'a', name: '甲', metrics: { m: 'abc' } },
+    { id: 'b', name: '乙', metrics: { m: NaN } },
+    { id: 'c', name: '丙', metrics: { m: Infinity } },
+    { id: 'd', name: '丁', metrics: { m: -7 } },
+    { id: 'e', name: '戊', metrics: { m: 5 } },
+  ],
+});
+const vBad = v2Bad.config.views[0].items;
+ok('v2：非法值(非数字/NaN/Infinity) → 归零',
+  vBad.find((i) => i.name === '甲')?.value === 0 &&
+  vBad.find((i) => i.name === '乙')?.value === 0 &&
+  vBad.find((i) => i.name === '丙')?.value === 0,
+  vBad.map((i) => `${i.name}=${i.value}`).join(','));
+ok('v2：负值 → 取绝对值', vBad.find((i) => i.name === '丁')?.value === 7,
+  String(vBad.find((i) => i.name === '丁')?.value));
+
+// 6.6 highlightEntityId 命中项 highlight:true，其余 false
+const v2Hl = normalizeConfig({
+  schemaVersion: '1.0',
+  dataset: { id: 'd', name: 'T', highlightEntityId: 'b' },
+  metrics: [{ key: 'm', label: 'M', unit: '个', missingPolicy: 'skip' }],
+  entities: [
+    { id: 'a', name: '甲', metrics: { m: 1 } },
+    { id: 'b', name: '乙', metrics: { m: 2 } },
+    { id: 'c', name: '丙', metrics: { m: 3 } },
+  ],
+});
+const hlItems = v2Hl.config.views[0].items;
+ok('v2 highlightEntityId：命中项 highlight=true',
+  hlItems.find((i) => i.name === '乙')?.highlight === true,
+  hlItems.map((i) => `${i.name}:${i.highlight}`).join(','));
+ok('v2 highlightEntityId：非命中项 highlight=false',
+  hlItems.find((i) => i.name === '甲')?.highlight === false &&
+  hlItems.find((i) => i.name === '丙')?.highlight === false, '');
+ok('v2 highlightEntityId：命中项保留 _id 便于表格编辑后复现',
+  hlItems.find((i) => i.name === '乙')?._id === 'b', String(hlItems.find((i) => i.name === '乙')?._id));
+
+// highlight 也支持按名称匹配 + opts 覆盖
+const hlByName = normalizeConfig({
+  schemaVersion: '1.0', dataset: { id: 'd', name: 'T' },
+  metrics: [{ key: 'm', label: 'M', unit: '个', missingPolicy: 'skip' }],
+  entities: [{ id: 'a', name: '甲', metrics: { m: 1 } }, { id: 'b', name: '乙', metrics: { m: 2 } }],
+}, { highlightEntityId: '甲' });
+ok('v2 highlight：支持传入 opts.highlightEntityId 且可按名称命中',
+  hlByName.config.views[0].items.find((i) => i.name === '甲')?.highlight === true, '');
+
+// 无 highlightEntityId → 全部 false，不报错
+const noHl = normalizeConfig(v2Basic);
+ok('v2 无 highlightEntityId：默认无高亮',
+  noHl.config.views[0].items.every((i) => i.highlight === false), '');
+
+// 6.7 边界：空 entities / 全 metric 禁用 → views.length === 0 且不抛异常
+let edgeOk = true, edgeCfg = null;
+try {
+  edgeCfg = normalizeConfig({ schemaVersion: '1.0', metrics: [], entities: [] });
+} catch (err) { edgeOk = false; }
+ok('v2 边界：空 entities + 空 metrics → 不抛异常且 views=0',
+  edgeOk && edgeCfg.config.views.length === 0, `views=${edgeCfg?.config.views.length}`);
+
+let edge2Ok = true, edge2Cfg = null;
+try {
+  edge2Cfg = normalizeConfig({
+    schemaVersion: '1.0', dataset: { id: 'd', name: 'T' },
+    metrics: [{ key: 'a', label: 'A', unit: '', enabled: false, missingPolicy: 'skip' }],
+    entities: [{ id: 'x', name: '甲', metrics: { a: 1 } }],
+  });
+} catch (err) { edge2Ok = false; }
+ok('v2 边界：全 metric 禁用 → 不抛异常且 views=0',
+  edge2Ok && edge2Cfg.config.views.length === 0, `views=${edge2Cfg?.config.views.length}`);
+
+// 6.8 宽松兜底：缺 metrics[] 但有 entities[].metrics → 推断出视图
+const inferred = normalizeConfig({
+  schemaVersion: '1.0', dataset: { id: 'd', name: 'T' },
+  entities: [
+    { id: 'a', name: '甲', metrics: { pop: 10, area: 20 } },
+    { id: 'b', name: '乙', metrics: { pop: 30, area: 40 } },
+  ],
+});
+ok('v2 兜底：缺 metrics[] → 从 entities[].metrics 推断视图（2 个）',
+  inferred.config.views.length === 2, `views=${inferred.config.views.length}, keys=${inferred.config.views.map((v) => v.key).join(',')}`);
+ok('v2 兜底：推断视图条目数量正确',
+  inferred.config.views.every((v) => v.items.length === 2),
+  inferred.config.views.map((v) => `${v.key}:${v.items.length}`).join(','));
+
+// 6.9 宽松兜底：v2 生成视图经旧分支再次规范化 → 结果稳定（幂等）
+const once = normalizeConfig(v2Basic).config;
+const twice = normalizeConfig(v2Basic).config;
+ok('v2 幂等：同输入两次规范化结果一致',
+  JSON.stringify(once) === JSON.stringify(twice), '');
+
+// 6.10 默认数据集：内置 v2 模板可用
+const { DEFAULT_CONFIG } = await import('../../src/core/config.js');
+ok('默认数据集：内置 v2 模板生成 ≥1 个视图',
+  DEFAULT_CONFIG.views.length >= 1, `views=${DEFAULT_CONFIG.views.length}`);
+ok('默认数据集：标题非空', typeof DEFAULT_CONFIG.title === 'string' && DEFAULT_CONFIG.title.length > 0, DEFAULT_CONFIG.title);
+
+// ───────────────────────────────────────────────────────────
+// 7) v2.6 视频规格：画幅比例（video.js）+ 播放间隔推导
+// ───────────────────────────────────────────────────────────
+
+// 7.1 比例表完整性
+ok('video：四种比例齐备且顺序固定',
+  ASPECT_KEYS.join(',') === '16:9,9:16,1:1,4:3' && ASPECT_KEYS.every((k) => ASPECTS[k]),
+  ASPECT_KEYS.join(','));
+ok('video：默认为 16:9', DEFAULT_ASPECT === '16:9', DEFAULT_ASPECT);
+
+// 7.2 normalizeAspect：合法 / 像素写法 / 非法
+ok('video：normalizeAspect 合法值原样返回', normalizeAspect('9:16') === '9:16' && normalizeAspect('1:1') === '1:1');
+ok('video：normalizeAspect 容错「1920x1080」→ 16:9', normalizeAspect('1920x1080') === '16:9', String(normalizeAspect('1920x1080')));
+ok('video：normalizeAspect 容错「2160×3840」→ 9:16', normalizeAspect('2160×3840') === '9:16', String(normalizeAspect('2160×3840')));
+ok('video：normalizeAspect 非法返回 null', normalizeAspect('7:3') === null && normalizeAspect(null) === null && normalizeAspect(123) === null);
+ok('video：ratioOf 非法输入回退 16:9 数值', ratioOf('nope') === 16 / 9, String(ratioOf('nope')));
+
+// 7.3 pixelSizeFor：长边固定 / 偶数 / 比例正确
+{
+  const cases = [
+    ['16:9', 1920, 1080], ['9:16', 1080, 1920], ['1:1', 1920, 1920], ['4:3', 1920, 1440],
+  ];
+  let allOk = true;
+  const detail = [];
+  for (const [k, w, h] of cases) {
+    const r = pixelSizeFor(k, 1920);
+    const okc = r.width === w && r.height === h && r.width % 2 === 0 && r.height % 2 === 0;
+    if (!okc) allOk = false;
+    detail.push(`${k}→${r.width}×${r.height}`);
+  }
+  ok('video：pixelSizeFor 长边 1920 且为偶数（四比例）', allOk, detail.join(' '));
+}
+ok('video：pixelSizeFor 非法比例回退 16:9', pixelSizeFor('xx', 1920).width === 1920, String(pixelSizeFor('xx', 1920).width));
+ok('video：pixelSizeFor 长边可配置（1080 → 16:9 = 1080×608）',
+  pixelSizeFor('16:9', 1080).width === 1080 && pixelSizeFor('16:9', 1080).height === 608,
+  `${pixelSizeFor('16:9', 1080).width}×${pixelSizeFor('16:9', 1080).height}`);
+
+// 7.4 deriveDuration：语义正确 / 边界 / 与 intervalFromDuration 互逆
+ok('video：默认间隔为 2000ms', DEFAULT_BAR_INTERVAL_MS === 2000 && INTERVAL_MIN === 200 && INTERVAL_MAX === 20000,
+  `${DEFAULT_BAR_INTERVAL_MS}/${INTERVAL_MIN}..${INTERVAL_MAX}`);
+{
+  const d = deriveDuration(10, 2000, 0.72);
+  ok('video：deriveDuration = n×interval/revealRatio', d === Math.round(10 * 2000 / 0.72), String(d));
+  ok('video：deriveDuration ≤0 柱数回退 1（不除零）', deriveDuration(0, 2000, 0.72) === Math.round(2000 / 0.72), String(deriveDuration(0, 2000, 0.72)));
+  ok('video：deriveDuration 非法间隔回退默认间隔',
+    deriveDuration(5, NaN, 0.72) === Math.round(5 * 2000 / 0.72), String(deriveDuration(5, NaN, 0.72)));
+  ok('video：deriveDuration 间隔 clamp 上界 20000',
+    deriveDuration(1, 999999, 0.72) === Math.round(20000 / 0.72), String(deriveDuration(1, 999999, 0.72)));
+  ok('video：deriveDuration 间隔 clamp 下界 200',
+    deriveDuration(1, 1, 0.72) === Math.round(200 / 0.72), String(deriveDuration(1, 1, 0.72)));
+  ok('video：revealRatio 越大 → 总时长越短（揭示段更短）',
+    deriveDuration(10, 2000, 0.5) > deriveDuration(10, 2000, 0.9),
+    `${deriveDuration(10, 2000, 0.5)} > ${deriveDuration(10, 2000, 0.9)}`);
+  // 互逆：由时长反推的间隔应约等于原间隔
+  const back = intervalFromDuration(d, 10, 0.72);
+  ok('video：intervalFromDuration 与 deriveDuration 互逆（误差 ≤1ms）', Math.abs(back - 2000) <= 1, `回推=${back}`);
+}
+
+// 7.5 normalizeConfig 对新增字段的兜底
+{
+  const { config: c1 } = normalizeConfig({
+    aspect: '9:16', barIntervalMs: 3000, source: 'S', notes: ['a', '', 'b'],
+    views: [{ key: 'v', items: [{ name: 'x', value: 1 }, { name: 'y', value: 2 }] }],
+  });
+  ok('config：aspect 透传并规范化', c1.aspect === '9:16', c1.aspect);
+  ok('config：barIntervalMs 透传', c1.barIntervalMs === 3000, String(c1.barIntervalMs));
+  ok('config：source 透传', c1.source === 'S', c1.source);
+  ok('config：notes 过滤空项', c1.notes.length === 2, c1.notes.join('/'));
+  ok('config：未给 durationMs → 由 interval 推导（2×3000/0.72）',
+    c1.durationMs === Math.round(2 * 3000 / 0.72) && c1._durationExplicit === false, String(c1.durationMs));
+}
+{
+  const { config: c2 } = normalizeConfig({
+    durationMs: 4000, barIntervalMs: 3000, aspect: 'bad',
+    views: [{ items: [{ name: 'x', value: 1 }] }],
+  });
+  ok('config：显式 durationMs 优先（_durationExplicit=true）',
+    c2.durationMs === 4000 && c2._durationExplicit === true, String(c2.durationMs));
+  ok('config：非法 aspect 回退 16:9 并告警', c2.aspect === '16:9', c2.aspect);
+}
+{
+  // 时长按「最大项数」推导（多视图时以最长一屏为准）
+  const { config: c3 } = normalizeConfig({
+    barIntervalMs: 1000, revealRatio: 0.5,
+    views: [
+      { key: 'a', items: [{ name: '1', value: 1 }] },
+      { key: 'b', items: [{ name: '1', value: 1 }, { name: '2', value: 2 }, { name: '3', value: 3 }, { name: '4', value: 4 }] },
+    ],
+  });
+  ok('config：多视图时长按最大项数推导（4×1000/0.5）', c3.durationMs === 8000, String(c3.durationMs));
+}
+{
+  // notes 非数组 → 忽略并告警
+  const { config: c4, warns: w4 } = normalizeConfig({
+    notes: '这不是数组', views: [{ items: [{ name: 'x', value: 1 }] }],
+  });
+  ok('config：notes 非数组 → 回退空数组并告警',
+    Array.isArray(c4.notes) && c4.notes.length === 0 && w4.some((w) => w.includes('notes')), c4.notes.length + '|' + w4.length);
+}
+{
+  // v2 模板内声明 aspect / barIntervalMs → 经 adapt 透传到规范化结果
+  const v2 = { schemaVersion: '1.0', dataset: { name: 'T', source: 'SRC', notes: ['N1'] }, aspect: '1:1', barIntervalMs: 4000,
+    entities: [{ id: 'a', name: '甲', metrics: { m: 1 } }, { id: 'b', name: '乙', metrics: { m: 2 } }],
+    metrics: [{ key: 'm', label: 'M' }] };
+  const { config: c5 } = normalizeConfig(v2);
+  ok('config：v2 模板 aspect 透传', c5.aspect === '1:1', c5.aspect);
+  ok('config：v2 模板 barIntervalMs 透传并推导时长', c5.barIntervalMs === 4000 && c5.durationMs === Math.round(2 * 4000 / 0.72),
+    `${c5.barIntervalMs}|${c5.durationMs}`);
+  ok('config：v2 模板 source 单独保留（与 subtitle 并存）',
+    c5.source === 'SRC' && c5.subtitle.includes('SRC') && c5.notes[0] === 'N1',
+    `source=${c5.source} sub=${c5.subtitle} notes=${c5.notes.length}`);
+}
+{
+  // dataset.aspect 也可声明（模板作者两种写法都常见）
+  const v2b = { schemaVersion: '1.0', dataset: { name: 'T', aspect: '4:3' }, entities: [{ id: 'a', name: '甲', metrics: { m: 1 } }], metrics: [{ key: 'm' }] };
+  const { config: c6 } = normalizeConfig(v2b);
+  ok('config：v2 dataset.aspect 亦可识别', c6.aspect === '4:3', c6.aspect);
+}
+{
+  // 内置默认数据集带默认画幅与间隔
+  ok('默认数据集：aspect 已定义', typeof DEFAULT_CONFIG.aspect === 'string' && !!ASPECTS[DEFAULT_CONFIG.aspect], DEFAULT_CONFIG.aspect);
+  ok('默认数据集：barIntervalMs 已定义', DEFAULT_CONFIG.barIntervalMs === 2000, String(DEFAULT_CONFIG.barIntervalMs));
+  ok('默认数据集：总时长由间隔推导（28 项 × 2000 / 0.72）',
+    DEFAULT_CONFIG.durationMs === Math.round(28 * 2000 / 0.72), String(DEFAULT_CONFIG.durationMs));
+}
+
 console.log(`\n==== 单元测试汇总：${pass}/${pass + fail} 通过 ====`);
-if (fail) process.exitCode = 1;

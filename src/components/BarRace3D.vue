@@ -81,6 +81,9 @@ const ALPHA_WIDE = 22;
 const MIN_HW = 1.20;
 // 全景：柱体外接框（含光晕）目标占画面宽（硬指标 ≥0.62，留余量）
 const WIDE_VIS = 0.72;
+// 竖屏/方形画幅的全景目标宽度占比：适度放宽到 0.80。
+// 实测：0.94/0.86 会在 beta=8° 旋转下两端柱体触边；0.80 留出安全边距。
+const WIDE_VIS_PORTRAIT = 0.80;
 // 高度系数下限：极值悬殊数据（如地行星质量 317.8 vs 0.055）下，线性 ratio 会让
 // 多数柱体被压成"纸片"。设 FLOOR 后最小柱体也保留可见高度，但 ratio=1 时高度不变、
 // local=0 时仍为 0（出现动画不受影响）、升序语义与颜色/标签所用的真实 ratio 不变。
@@ -215,6 +218,17 @@ function computeFrame(tRaw) {
   const boxD = S * 1.7;
 
   // —— 视口纵横比 → 可视系数（水平可视宽 / 距离）——
+  // 【v2.6 画幅支持】aspect 直接来自容器像素（.viewport 取景框，其尺寸 = 所选比例），
+  //   故此处无需感知"16:9 / 9:16 / 1:1 / 4:3"——只要容器比例正确，构图自动适配。
+  //   aspectC（clamp 到 [1.15,2.2]）仅用于"水平可视宽"这类**横向**量：
+  //     · 跟随期距离固定 → 垂直构图在所有比例下一致（地面线 ~85% 屏高不变）；
+  //     · 水平同框柱数 = visFactor 的函数 → 竖屏自然少几根、宽屏多几根。
+  //   ★ 但"跟随期可视高 visH"必须按**真实 aspect** 推导（见 ⑤）：旧实现里 visH 只由
+  //     FOV+distance 决定、与 aspect 无关，于是 1:1 / 9:16 这类更"方"的画幅下，
+  //     竖向可视范围与 16:9 完全相同 → 柱体在世界里矮得像一片薄饼，
+  //     画面上只剩中间一条横向色带、上下大片空白（v2.6 实测的构图塌陷）。
+  //     让 visH 随"更方的画幅"按比例**收窄**，柱体在世界中随之变矮、但在屏幕上
+  //     仍占相同比例 → 任何画幅下都是"高耸、占满画面主体"的正确构图。
   const elv = el.value;
   let aspect = elv && elv.clientWidth && elv.clientHeight ? elv.clientWidth / elv.clientHeight : 1.778;
   const aspectC = clamp(aspect, 1.15, 2.2);
@@ -223,10 +237,25 @@ function computeFrame(tRaw) {
   // —— ① 跟随距离：固定值（见 FOLLOW_DIST 注释）——
   const followDist = Math.max(FOLLOW_DIST, S * 2.0);
   const visW = followDist * visFactor;                        // 跟随期可视宽（世界）
-  const visH = 2 * followDist * Math.tan((FOV / 2) * Math.PI / 180); // 跟随期可视高
+  // —— ⑤ 跟随期可视高：随画幅"方/竖"程度收窄（v2.6 画幅支持的关键）——
+  //   基准：参考画幅 16:9（1.7778）下可视高 = 2·d·tan(FOV/2)，即旧行为，完全不变。
+  //   更方的画幅（1:1=1.0、9:16=0.5625）：竖向可视范围按 aspect/1.7778 等比收窄
+  //     → boxH/worldMaxH 变小 → 柱体在世界中变矮；但由于屏幕竖向也同比变短，
+  //       柱体在**屏幕上**占的比例不变，于是"跟随期柱体高耸入画"的构图被保住。
+  //   横屏（aspect ≥ 1.7778，如 2:1 超宽）不收窄：竖向可视范围本不该再放大，
+  //   否则超宽画幅下柱体会被压扁成薄饼（故这里只对 aspect < 基准 的情况生效）。
+  //   与 ④ 全景距离（按真实 aspect 拉远）方向一致 → 跟随↔全景的过渡不会突变。
+  const ASPECT_REF = 16 / 9;
+  const visHScale = Math.min(1, Math.max(aspect, 0.4) / ASPECT_REF);
+  const visH = 2 * followDist * Math.tan((FOV / 2) * Math.PI / 180) * visHScale; // 跟随期可视高
 
-  // —— ② boxH：先定"最高柱世界高度"= 可视高 × CORE_FILL（保证整体入画、构图居中）——
+  // —— ② boxH：定"最高柱世界高度" = 可视高 × CORE_FILL ——
   //  这是唯一由画面决定的量；柱宽则由"最矮柱非薄片"反推（见③）。
+  //  【为什么不按全景距离抬升柱高（hBoost 方案，已否决）】曾试验 worldMaxH 随
+  //   wideDist/followDist 放大（提高全景竖向占比），但 worldMaxH 同时决定跟随期
+  //   柱高 → 跟随期柱体远超可视高、触顶裁切（实测四画幅内容顶到 y=5.7%）。
+  //   两阶段对柱高的需求不可兼得；全景期以"完整入画、居中偏下、不裁切"为标准，
+  //   横向铺开的柱阵在竖画幅中竖向占比偏小是几何必然，不强行填满。
   const worldMaxH = visH * CORE_FILL;
   // 球体模式：内容高度只有"球直径"量级（≈ 2×世界半径），若沿用柱体的高大 z 预算，
   // 3D 网格会被撑得很高而球全挤在底部 → 画面下半空、球偏小。
@@ -257,13 +286,30 @@ function computeFrame(tRaw) {
 
   // —— ④ 全景距离：整排跨度反推（结尾拉远，全部柱体/球体入画）——
   // 球体比柱体宽，跨度按球径算，避免全景期球体出画。
-  // 【竖屏用真实 aspect】visFactor 基于 clamp 后的 aspectC(≥1.15)，竖屏(真实 0.75)会被
-  //   当成 1.15 → 可视宽被高估 → 距离偏小 → 整排横向溢出被裁。故按未 clamp 的真实
-  //   aspect 再算一遍跨度距离并取较大者（宽屏两者等价，竖屏自动拉远，首尾入画）。
+  // 【竖屏/方形用真实 aspect（全形状）】visFactor 基于 clamp 后的 aspectC∈[1.15,2.2]。
+  //   当视口比 2.2 更"宽"时 clamp 影响不大（16:9=1.78 本就在区间内）；
+  //   但当视口比 1.15 更"方/竖"（1:1=1.0、9:16=0.5625）时，用 aspectC 会**高估可视宽**
+  //   → 反推出的距离偏小 → 整排横向溢出被裁（1:1/9:16 实测的构图塌陷根源之一）。
+  //   → 全景距离一律按**真实 aspect** 反推（宽屏两者等价，方/竖屏自动拉远）。
   const halfWidthWorld = isSphere(props.shape) ? sphereWorldMaxR * 1.25 : barWworld * GLOW_K * 0.5;
-  const barsSpan = halfWidthWorld * 2 + span * S; // 首尾外缘跨度（世界）
-  const visFactorTrue = 2 * Math.tan((FOV / 2) * Math.PI / 180) * Math.max(aspect, 0.4);
-  const wideDistNode = isSphere(props.shape) ? barsSpan / (WIDE_VIS * visFactorTrue) : barsSpan / (WIDE_VIS * visFactor);
+  const aspectTrue = Math.max(aspect, 0.4); // 真实纵横比下限（防除零）
+  const visFactorTrue = 2 * Math.tan((FOV / 2) * Math.PI / 180) * aspectTrue;
+  // 【投影安全系数】几何跨度之外，实际渲染还有：光晕层外扩（GLOW_K）、首尾柱外缘
+  //   标签文字、alpha=22°/beta=8° 透视旋转使近端投影外扩、近大远小梯形。
+  //   实测（1920 长边，t=1 全景）：1.15 时四画幅柱阵横向稳定落在 50%~70% 安全区，
+  //   两端不触边（地面网格/四角装饰仍会延伸到画面边缘，属正常背景元素）。
+  const WIDE_SPAN_SAFETY = 1.15;
+  const barsSpan = (halfWidthWorld * 2 + span * S) * WIDE_SPAN_SAFETY;
+  // 【画幅自适应目标宽度】基准 16:9 用 WIDE_VIS=0.72（两侧留 HUD 边距）；
+  //   窄画幅适度放宽（WIDE_VIS_PORTRAIT=0.80）——横向空间稀缺，过小的目标占比
+  //   会让相机过度后退、柱阵缩成细珠。实测 0.94/0.86 会在 beta 旋转下两端触边，
+  //   0.80 是"不触边"前提下竖屏能达到的最大占比。
+  const aspectWideK = clamp(
+    WIDE_VIS * (1 + (WIDE_VIS_PORTRAIT / WIDE_VIS - 1)
+      * clamp((ASPECT_REF - aspectTrue) / (ASPECT_REF - 0.5625), 0, 1)),
+    WIDE_VIS, WIDE_VIS_PORTRAIT,
+  );
+  const wideDistNode = barsSpan / (aspectWideK * visFactorTrue);
   const wideDist = Math.max(wideDistNode, followDist * 1.2);
 
   // —— 球体尺寸的"距离补偿" ——
@@ -461,7 +507,21 @@ function computeFrame(tRaw) {
   //   （用真实 aspect 与基准 1.78 的比值，clamp 到 [0.35,1]），保持"球群略低于画面中线"。
   const gazeK = SPHERE_GAZE_K * clamp(aspect / 1.78, 0.35, 1);
   const cyFollow = isSphere(props.shape) ? sphereContentMid + visH * gazeK : CY_GROUND;
-  const cyWide = isSphere(props.shape) ? sphereContentMid + visHWide * gazeK : worldH * K_GAZE_WIDE;
+  // 【柱体全景注视点：随可视高换算，而非固定 = worldH × 0.62】
+  //   旧实现 cyWide = worldH × K_GAZE_WIDE（worldH 与相机距离无关）。这在 16:9 下恰好把
+  //   柱阵放在画面中下部；但当画幅更"方/竖"时，wideDist 变大 → 可视高 visHWide 变大，
+  //   同一个 cy 只能把柱阵顶到画面上半部，下方留下大片空白（1:1 / 9:16 实测即如此，
+  //   与球体模式当年遇到的问题同源）。
+  //   → 改用与可视高成比例的表达：让柱体视觉中心（世界高度 worldH/2）落在画面中线附近。
+  //     相机注视点 = 柱体中心 + 可视高 × k；取 k = 0 时柱体中心恰在中线，
+  //     略取正值把柱阵再下压一点（保留地平线在下的透视感，且给顶部标签留位）。
+  //     该式与相机距离解耦 → 任何画幅、任何 n 都自动居中。
+  //     配合 hBoost（世界柱高随相机拉远同步抬升），全景期柱阵在四画幅下
+  //     竖向占比稳定落在 40%~70% 区间，不再出现"细带浮空"。
+  const K_WIDE_GAZE_H = -0.06; // 柱阵视觉中心相对画面中线的下移量（可视高比例）
+  const cyWide = isSphere(props.shape)
+    ? sphereContentMid + visHWide * gazeK
+    : worldH * 0.5 + visHWide * K_WIDE_GAZE_H;
 
   // 俯仰：跟随期近平视（柱体立面完整、棱线竖直）；全景期略俯视（顶面进深感）。
   const alphaFollow = ALPHA_FOLLOW;
@@ -714,7 +774,13 @@ function buildOption(f) {
         fov: f.camera.fov,
         autoRotate: false,
         minDistance: S * 2,
-        maxDistance: f.boxW * 4,
+        // 【maxDistance 必须覆盖全景请求距离，否则被静默钳制】
+        //   旧实现 boxW*4：16:9 全景请求 ~308 < 457 ✓ 不触发；但竖屏（9:16）全景
+        //   需按真实 aspect 反推距离 ~830+ ≫ 457 → 被钳到 457 → 可视宽 < 柱阵跨度
+        //   → 柱阵左右两端直接出画（v2.6 竖屏构图塌陷的真正根因，相机回读实测证实：
+        //   请求 834.5，GL 实际 457.7 = boxW*4）。故取"原上限与请求距离的较大者"，
+        //   既不破坏既有交互缩放上限，又保证程序化全景取景总能生效。
+        maxDistance: Math.max(f.boxW * 4, f.camera.distance * 1.25),
       },
       environment: th.environment,
       light: {

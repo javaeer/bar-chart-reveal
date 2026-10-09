@@ -1,5 +1,197 @@
 # 更新记录
 
+## v2.6.0 — 画幅比例 / 播放间隔 / 模板信息编辑 / 流式自适应布局
+
+本轮补齐「模板信息关联」并加入**画幅比例**与**播放间隔**两项视频规格控制，同时把底部控件
+从固定 2×2 网格改为**流式自适应布局**，并修复了一处竖屏/方形画幅的**柱阵塌陷**根因缺陷
+（`maxDistance` 静默钳制）。回归：单元测试 **114/114**、QA **45/45**、
+画幅 QA **32/32**、交互 **10/10**、播放 41 采样 0 空白帧。
+
+### 1. 新增 `src/core/video.js`（纯逻辑，全新）
+
+- `ASPECTS` / `ASPECT_KEYS` / `DEFAULT_ASPECT` —— 四比例表：`16:9`（默认）/ `9:16` / `1:1` / `4:3`。
+- `normalizeAspect(v)` —— 非法返回 `null`；**容错像素写法**（`1920x1080`、`2160×3840`）
+  自动映射到最接近的标准比例。
+- `pixelSizeFor(aspect, longEdge = 1920)` —— 按**长边固定**推导导出分辨率，结果恒为偶数：
+  `16:9→1920×1080`、`9:16→1080×1920`、`1:1→1920×1920`、`4:3→1920×1440`。
+- `deriveDuration(n, intervalMs, revealRatio)` —— `n × intervalMs / revealRatio`；
+  柱数 ≤0 回退 1（不除零），间隔 clamp 到 `[200, 20000]`。
+- `intervalFromDuration(...)` —— 上式的**互逆换算**（UI 双向联动用，实测回推误差 ≤1ms）。
+- 由 `config.js` 重新导出，消费方只 import `config.js` 一处即可。
+
+### 2. `config.js` 新增四个顶层字段
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `aspect` | `'16:9'` | 画幅比例；非法回退并告警 |
+| `barIntervalMs` | `2000` | 每根柱子弹出间隔（clamp `200..20000`） |
+| `source` | `''` | 数据来源（与 `subtitle` 分开，供信息面板独立编辑） |
+| `notes` | `[]` | 备注数组；过滤空项，非数组则回退并告警 |
+
+**总时长语义变更（向后兼容）**：显式给出 `durationMs` 时**以它为准**
+（内部 `_durationExplicit=true`，老配置行为完全不变）；未给出时按
+`柱体数量 × barIntervalMs / revealRatio` 推导，柱体数量取**所有视图中的最大项数**。
+
+### 3. `.viewport` 取景框：预览比例 == 导出比例（关键结构改动）
+
+- `.stage` 内新增一层 `.viewport`（**取景框**）：按所选比例取**最大内接矩形**并居中，
+  带描边与「`16:9 · 1920×1080`」标签；3D 画布只铺满取景框。
+- `BarRace3D` 从 `el.value.clientWidth/clientHeight` 读纵横比 → **自动等于所选比例**，
+  3D 侧无需新增任何逻辑（既有 `aspectC` / `visFactorTrue` 已兼容竖屏）。
+- 尺寸由 JS 用实测窗口像素直接计算（**不把 `min()`/`calc()` 写进 CSS 自定义属性**）：
+  后者在浏览器里会静默失效导致取景框恒等于窗口比例。实测四比例偏差均为 **0.00%**。
+- UI 舞台层 `.stage-ui` 按 `--ui-inset` 内缩，比例变窄（如 9:16）时标题/面板仍落在画面内。
+- 新增 URL 参数 `?aspect=` 与 `?interval=`；出片脚本自动带上二者，
+  使浏览器取景框与导出像素**严格同源**。
+
+### 4. 「模板信息」关联补齐（`InfoPanel.vue`，全新）
+
+- 数据工具条新增 **ⓘ 信息** 按钮，打开标题 / 副标题 / 来源 / 备注编辑面板
+  （分别对应 v2 模板的 `dataset.name` / `dataset.source` / `dataset.notes[]`）。
+- 备注按行编辑（多行 ↔ 数组互转，空行自动过滤）；改动即时同步到舞台标题栏与导出画面。
+- `useDataset` 新增 `setMeta(patch)`。
+
+### 5. 底部控件 dock 改为**流式自适应布局**
+
+- 由固定 `grid-template-columns: auto auto`（2×2）改为 **`flex-wrap` 自动换行**：
+  分组按内容宽度自然排布、装不下才折行，**不再依赖断点跳变**，任何宽度下既不横向溢出、
+  也尽量多列并排（消除"一列堆到底"的空旷感）。
+- 新增两组控件：
+  - **比例**：四个按钮，各带**按比例绘制的等比小窗图标**（用 `aspect-ratio` 属性，
+    无需四套硬编码宽高）+ 比例文字。
+  - **间隔**：`1s / 1.5s / 2s / 3s / 5s` 档位 + 时长读数（标注「自动 / 手动」，
+    手动锁定时以暖色提示，避免与自动混淆）。
+- 保留 `.ui` 根类与 `.dock` DOM 契约（QA 与外部样式依赖）。
+
+### 6. 出片 CLI 扩展（`scripts/render.mjs`）
+
+- 新增 `--aspect 16:9|9:16|1:1|4:3`：推导导出像素并写入 URL（`ffprobe` 实测竖屏出片
+  确为 `1080×1920`）。
+- 新增 `--interval <ms>`：改写 `barIntervalMs` 并**重算**总时长（解锁显式时长）。
+- `validateNumericArgs` 增补校验：`--interval` 范围、`--aspect` 合法值，非法时尽早失败。
+- `shootFrame` / `renderFrames` 透传 `width` / `height`（能力本已具备，此前未接线）。
+
+### 7. 构图修复（竖屏/方形画幅的柱阵塌陷，根因级）
+
+排查中发现一处**长期潜伏**的缺陷：`grid3D.viewControl.maxDistance` 写死为 `boxW * 4`
+（≈457），而竖屏/方形的全景相机需要按**真实纵横比**反推距离，经常远超该值
+（28 项数据竖屏需求 ≈770）。echarts-gl 对此**静默钳制**（不报错、不告警），
+相机停在 457 → 可视宽度小于柱阵跨度 → **柱阵左右两端直接出画**。
+相机回读实测：请求 `834.5`、实际 `457.7 = boxW*4`。
+
+- `maxDistance` 改为 `Math.max(boxW * 4, camera.distance * 1.25)`：
+  保留既有交互缩放上限，同时保证程序化全景取景总能生效。
+- 全景跨度增加**投影安全系数** `WIDE_SPAN_SAFETY = 1.15`：几何跨度之外还有光晕层外扩
+  （`GLOW_K`）、首尾柱外缘标签、`alpha=22°/beta=8°` 透视旋转外扩、近大远小梯形。
+- 全景目标宽度按画幅自适应：`16:9` 用 `WIDE_VIS=0.72`，窄画幅过渡到
+  `WIDE_VIS_PORTRAIT=0.80`（实测 0.94/0.86 会两端触边，0.80 是不触边的上限）。
+- 跟随期可视高 `visH` 按真实纵横比收窄（`visHScale`），使柱体在方/竖画幅下
+  仍保持"高耸入画"而非被压成薄饼。
+- ⛔ **已否决的方案**：按全景距离抬升世界柱高（`hBoost`）——`worldMaxH` 同时决定跟随期
+  柱高，抬升后跟随期柱体远超可视高、触顶裁切（实测四画幅内容顶到 `y=5.7%`）。
+  两阶段对柱高的需求不可兼得，全景期以"完整入画、居中偏下、不裁切"为准。
+
+### 8. 其它修复
+
+- `looksLikeV2` 判别规则修正：出现顶层 `views[]` **一律**按旧格式处理（保护 `?cfg=` 契约）。
+- `adaptV2` 的 `missingPolicy=disable` 仅在**确实存在缺失**时才丢弃视图（原先会误杀全员有值的维度）。
+- 高亮匹配同时支持实体 `id` 与显示名。
+- `notes` 为单个字符串时也会告警（原先静默忽略）。
+- `DEFAULT_CONFIG` 改为过 `normalizeConfig`（原先直接用 `adaptV2` 裸输出，
+  导致 `durationMs` / `aspect` 等"规范化阶段才补齐"的字段为 `undefined`）。
+- 内置数据集去掉显式 `durationMs: 9000`，改用间隔推导（28 项 × 2s / 0.72 ≈ 77.8s）。
+
+### 9. QA 扩展
+
+- 新增 `scripts/qa/verify-aspect.mjs`（**32** 项）：四比例取景框实测比例 == 所选比例、
+  **A2 相机距离未被 `maxDistance` 静默钳制**（用 28 项长列表触发真实钳制场景，
+  请求 ≈770 ≫ 旧上限 457，回退旧代码必失败）、各比例出片非空白、
+  `?interval=` 推导时长、导出像素（长边/偶数/比例）、边界回退。
+- `config.test.mjs` 由 80 → **114** 项（增补画幅表 / 像素推导 / 时长推导 / 互逆换算 / 新字段兜底）。
+- `interact.mjs` 由 7 → **10** 项（增补画幅切换、间隔切换、信息面板编辑）。
+- `package.json` 新增 `npm run qa:aspect`，`qa:all` 纳入新套件。
+
+### 10. 最终回归
+
+| 套件 | 结果 |
+|---|---|
+| 单元测试 `config.test.mjs` | **114 / 114** |
+| 构图/确定性 `verify.mjs` | **45 / 45** |
+| 画幅/间隔 `verify-aspect.mjs` | **32 / 32** |
+| 交互回归 `interact.mjs` | **10 / 10** |
+| 播放 `verify-playback.mjs` | 41 采样 / 0 空白帧 |
+| `npm run build` / `build:single` | 通过 |
+
+---
+
+## v2.5.0 — 数据模板（v2 schema）支持：一份模板涵盖全部维度
+
+本轮让工具**直接消费规范数据模板**（`schemaVersion / dataset / entity / metrics[] / entities[]`），
+自动识别并与既有内部格式**双轨兼容**。回归：单元测试 **80/80**、QA **45/45**、交互/播放全绿。
+
+### 1. 新增 v2 模板适配层（`src/core/adapt.js`，全新）
+
+- **纯逻辑模块**（只依赖 `TextEncoder` 等全局对象，浏览器 / Node 共用），导出：
+  - `looksLikeV2(raw)` —— 宽松判别：出现顶层 `views[]` → 旧格式；命中 `metrics[]` /
+    `entities[]` / `schemaVersion` 任一 → v2；其余交旧路径兜底。
+  - `adaptV2(raw, opts)` —— 把 v2 模板映射为「内部格式」对象，**绝不抛异常**，
+    返回 `{ config, warns }`。
+- **字段映射**：`dataset.name→title`；`source + notes[]`（` · ` 连接）`→subtitle`；
+  每个 `metric→view`（`key/label/short/unit` 直用，`decimals→fixed` 夹紧 `[0,6]`）；
+  每个 `entity→item`（`entity[nameField]→name`，`entity.metrics[key]→value`）。
+- **`enabled`**：`false` 表示该指标数据不可用 → 默认**整视图跳过**；`--include-disabled` /
+  `includeDisabled` 可强制纳入。
+- **`missingPolicy`** 三态：`skip`（缺值不产出条目）/ `zero`（缺值补 0）/ `disable`
+  （**有缺失即跳过整视图**；全员有值则正常保留）。
+- **`defaultVisible:false`**：仍生成视图，但排序到列表末尾。
+- **宽松兜底**：模板漏写 `metrics[]` 时，从 `entities[].metrics` 的 key 并集**推断**指标清单。
+- **可选 `highlightEntityId`**：命中实体标记 `highlight:true`，同时写入非契约字段 `_id`，
+  支持按 **id 或显示名**匹配。
+
+### 2. `normalizeConfig` 双格式分发（`src/core/config.js`）
+
+- 顶部统一分发：判为 v2 → 先 `adaptV2` 再递归走原逻辑；否则原逻辑**完全不动**。
+  两套格式因此**共享同一套兜底**（校验 / 截断 / 去重 / 至少一条），不存在双份规则分叉。
+- 条目构造新增保留可选 `_id`（供表格编辑后按 id 复现高亮）。
+- `DEFAULT_CONFIG` 不再手工维护字面量，改为 `adaptV2(HUINING_V2).config`。
+
+### 3. 内置数据集切换为 v2 模板（`src/data/huining-v2.js`，全新）
+
+- 生成纯字面量模块（无 fs/DOM 依赖，适配 `config.js` 的纯逻辑约束）：
+  会宁县 **28 个乡镇**、**5 个指标维度**、`highlightEntityId="huishi"`。
+- 指标口径：`population`（人 / skip / enabled）、`area`（km² / skip / enabled）、
+  `redSiteCount`（个 / zero / enabled）、`elevation` 与 `elevationRange`（**enabled:false**，
+  数据缺失较多，补录后可启用）→ **默认出 3 个视图**。
+- 旧格式 `samples/huining.json` 保留为兼容样本；新增 `samples/huining-v2.json` 作 v2 样例。
+
+### 4. CLI 与 URL 契约扩展
+
+- `scripts/render.mjs` 新增 `--include-disabled`；`--config` 同时接受内部格式与 v2 模板。
+- URL 新增 `?highlight=<id|名称>`，可运行时指定高亮主角（传空即清除）。
+
+### 5. 数据产出脚本（`scripts/data/fetch-huining.mjs`）
+
+- 保留原 `build()` 产出内部格式；新增 `buildV2()` 产出 v2 模板，
+  含 `_id` 拼音映射（如 `会师镇→huishi`）与各乡镇红色遗址清单。
+- 同时写出 `samples/huining-v2.json` 与 `src/data/huining-v2.js`。
+
+### 6. 测试
+
+- `scripts/qa/config.test.mjs`：新增 **33 条** v2 断言组——判别规则、字段映射、
+  `enabled`/`missingPolicy`/`decimals` 语义、高亮、空输入边界（不抛异常）、
+  `metrics[]` 缺失推断、幂等性、默认数据集可用性。**47 → 80 全过**。
+- `scripts/qa/verify.mjs`：新增 **10 条** v2 端到端断言——真实 v2 模板经 `?cfg=` 直出，
+  断言视图数=启用指标数、标题/副标题映射、全景非空白、首帧→全景递增、主角高亮、
+  以及**旧格式 `?cfg=` 契约不受影响**。**35 → 45 全过**。
+
+### 7. 兼容性
+
+- **旧数据文件与 `?cfg=` URL 契约零改动**：只要带顶层 `views[]` 即按旧格式处理。
+- `npm run render` 默认数据集由旧格式切换为内置 v2 模板（视图数 4 → 3，因两个海拔指标
+  默认禁用）；如需旧行为，显式传 `--config samples/huining.json` 即可。
+
+---
+
 ## v2.4.1 — 控件面板「科技风」重构 + 球体立体感与构图修复
 
 本轮聚焦**交互控件视觉升级**与**球体形状质量**，不改变柱体家族渲染与出片契约。
