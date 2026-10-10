@@ -20,26 +20,45 @@
 //   paintOverlay()      → 把该数据画到任意 CanvasRenderingContext2D 上。
 // ============================================================
 
-// —— 与 App.vue 里 .vp-overlay 的 CSS 变量保持一致的排版比例 ——
+// —— 排版度量的**唯一事实源** ——
+// ★ v2.8.0：这里是全项目唯一写比例系数的地方。
+//   浏览器预览（App.vue → --ov-* CSS 变量）与录制合成（paintOverlay）
+//   都从这里取值，两侧不可能再各自漂移。
+//   加字段时：只在此处加，然后 (a) 在 App.vue 的 cssVars 里注入同名 --ov-*
+//   变量，(b) 在下方 CSS 消费；Canvas 侧直接用 m.<key>。
 // 键：设计比例（相对取景框宽/高）；值：clamp 上下限（px）。
 const CL = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
-/** 取景框尺寸 → 一套排版度量（px）。与 App.vue 中 --ov-* 的定义一一对应。 */
+/** 取景框尺寸 → 一套排版度量（px）。App.vue 的 --ov-* 与此一一同名同值。 */
 export function overlayMetrics(w, h) {
   return {
+    // —— 外边距（取景框内安全边）——
     padX: CL(w * 0.030, 14, 44),
     padY: CL(h * 0.038, 12, 34),
+    // —— 标题区 ——
     title: CL(w * 0.0146, 15, 30),
     sub: CL(w * 0.0080, 10, 15),
+    subIndent: CL(w * 0.0125, 10, 26), // 副标题左缩进（与标题圆点对齐观感）
+    // —— 目标卡（当前目标）——
     name: CL(w * 0.0174, 17, 34),
     val: CL(w * 0.0209, 20, 42),
     panelW: CL(w * 0.152, 160, 300),
+    panelPadY: CL(h * 0.016, 9, 19),
+    panelPadX: CL(w * 0.012, 10, 24),
+    barGapS: CL(h * 0.011, 5, 12), // 进度条与排名行的间距
+    // —— 视图徽标 ——
     chipK: CL(w * 0.0057, 9, 13),
     chipV: CL(w * 0.0073, 11, 17),
+    chipPadY: CL(h * 0.008, 4, 9),
+    chipPadKX: CL(w * 0.008, 7, 16),
+    chipPadVX: CL(w * 0.0104, 8, 20),
+    // —— 排名行 ——
     rank: CL(w * 0.0063, 9, 14),
     rankB: CL(w * 0.0078, 11, 18),
+    // —— 数值单位 / 来源备注 ——
     unit: CL(w * 0.0073, 10, 17),
     src: CL(w * 0.0052, 8, 12),
+    // —— 通用小间距 ——
     dot: CL(w * 0.0063, 6, 13),
     gapS: CL(h * 0.009, 4, 10),
   };
@@ -75,16 +94,10 @@ export function buildOverlayModel(o) {
     subtitle: (config && config.subtitle) || '',
     viewLabel: view ? view.label : '',
     viewUnit: view ? view.unit : '',
-    target: active && active.shown ? {
-      name: active.name,
-      value: active.value,
-      fixed: view ? view.fixed : 0,
-      unit: view ? view.unit : '',
-      rank: active.rank,
-      total: active.total,
-      revealed: active.revealed,
-      progress: active.total ? Math.min(1, Math.max(0, active.revealed / active.total)) : 0,
-    } : null,
+    // ★ v2.8.3：移除「当前目标」卡（用户指令：干脆移除）。
+    //   该卡原占竖屏 57%~82% 纵带、宽达取景框 62.7%，是"遮挡柱体严重"的主因；
+    //   移除后信息层只剩 标题 / 视图徽标 / 来源备注，画面中央完全让给柱阵。
+    //   （`active` 参数保留在签名中：出片链路仍会传入，但不再参与绘制。）
     source: (config && config.source) || '',
     notes: (config && Array.isArray(config.notes)) ? config.notes.filter(Boolean) : [],
   };
@@ -126,7 +139,8 @@ function wrapText(ctx, text, maxW) {
 function font(size, weight = 400) {
   return `${weight} ${size}px "PingFang SC","Microsoft YaHei",system-ui,sans-serif`;
 }
-// 切角多边形（左上 + 右下切角，与 .metric-chip / .target-panel 一致）
+// 切角多边形（左上 + 右下切角，与 .metric-chip / .vp-source 的科技风切角一致）
+// ★ v2.8.3：.target-panel（当前目标卡）已移除，本函数现仅服务视图徽标与来源备注。
 function clipCorners(ctx, x, y, w, h, cut, corners) {
   // corners: 形如 {tl:bool, tr:bool, br:bool, bl:bool}
   ctx.beginPath();
@@ -177,7 +191,18 @@ export function paintOverlay(ctx, model) {
     ctx.fillStyle = col.muted;
     const subX = m.padX + Math.min(m.dot + 8, 26);
     const subMax = maxTitleW - (subX - m.padX);
-    const subLines = wrapText(ctx, model.subtitle, subMax);
+    const allSubLines = wrapText(ctx, model.subtitle, subMax);
+    // ★ v2.8.3 修复①：竖屏限 2 行（与 CSS `-webkit-line-clamp:2` 同源），
+    //   防止长副标题在窄画幅里换行 4+ 行、吃掉画面顶部 30% 并挤占柱阵。
+    //   截断时末行加省略号，语义上明确"还有内容"（而非静默丢失）。
+    const SUB_MAX_LINES = portrait ? 2 : Infinity;
+    let subLines = allSubLines;
+    if (allSubLines.length > SUB_MAX_LINES) {
+      subLines = allSubLines.slice(0, SUB_MAX_LINES);
+      let last = subLines[subLines.length - 1];
+      while (last.length > 1 && ctx.measureText(last + '…').width > subMax) last = last.slice(0, -1);
+      subLines[subLines.length - 1] = last + '…';
+    }
     let sy = ty - m.title * 1.22 + m.gapS + m.sub;
     for (const ln of subLines) { ctx.fillText(ln, subX, sy); sy += m.sub * 1.5; }
   }
@@ -236,86 +261,6 @@ export function paintOverlay(ctx, model) {
     ctx.textAlign = 'left';
   }
 
-  // ── ④ 当前目标卡片（左侧居中；竖屏落左下）──
-  if (model.target) {
-    const t = model.target;
-    const pw = m.panelW;
-    const pad = CL(h * 0.016, 9, 19);
-    const padXIn = CL(w * 0.012, 10, 24);
-    // 预排版行高
-    const nameLh = m.name * 1.2;
-    const valLh = m.val * 1.15;
-    const rankLh = m.rank * 1.4;
-    ctx.font = font(m.name, 700);
-    const nameLines = wrapText(ctx, t.name, pw - padXIn * 2);
-    const innerH = pad * 2 + m.rank * 1.4 /*head*/ + m.gapS + nameLines.length * nameLh + 5
-      + valLh + m.gapS + rankLh + m.gapS + 3 /*bar*/ + 4;
-    // 定位
-    let px = m.padX;
-    let py;
-    if (portrait) py = h - m.padY - innerH - m.src * 6.2; // 抬到来源之上
-    else py = (h - innerH) / 2;
-    py = Math.max(m.padY + 40, py);
-    const ph = innerH;
-    // 底板（左上 + 右下切角）
-    clipCorners(ctx, px, py, pw, ph, 14, { tr: true, bl: true });
-    ctx.fillStyle = 'rgba(6,14,28,0.85)';
-    ctx.fill();
-    ctx.strokeStyle = hexA(col.accent, 0.42); ctx.lineWidth = 1; ctx.stroke();
-    // 外发光
-    ctx.save();
-    clipCorners(ctx, px, py, pw, ph, 14, { tr: true, bl: true });
-    ctx.clip();
-    ctx.shadowColor = col.accent; ctx.shadowBlur = 34;
-    ctx.stroke(); ctx.restore();
-
-    let cy = py + pad;
-    // head: 小方块 + 当前目标
-    ctx.fillStyle = col.accent; ctx.shadowColor = col.accent; ctx.shadowBlur = 9;
-    const sq = m.rank * 0.55;
-    ctx.fillRect(px + padXIn, cy + m.rank * 0.35, sq, sq);
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = col.head; ctx.font = font(m.rank * 0.92, 400);
-    ctx.fillText('当前目标', px + padXIn + sq + 7, cy + m.rank * 0.95);
-    cy += m.rank * 1.4 + m.gapS;
-    // 名称
-    ctx.fillStyle = col.ink; ctx.font = font(m.name, 700);
-    ctx.shadowColor = hexA(col.accent, 0.42); ctx.shadowBlur = 18;
-    for (const ln of nameLines) { ctx.fillText(ln, px + padXIn, cy + m.name * 0.9); cy += nameLh; }
-    ctx.shadowBlur = 0;
-    cy += 5 - nameLh;
-    // 数值 + 单位
-    const valTxt = Number(t.value).toFixed(t.fixed);
-    ctx.fillStyle = col.accent; ctx.font = font(m.val, 800);
-    ctx.shadowColor = hexA(col.accent, 0.42); ctx.shadowBlur = 20;
-    ctx.fillText(valTxt, px + padXIn, cy + m.val * 0.9);
-    const vwpx = ctx.measureText(valTxt).width;
-    ctx.shadowBlur = 0;
-    if (t.unit) {
-      ctx.fillStyle = col.valUnit; ctx.font = font(m.unit, 600);
-      ctx.fillText(t.unit, px + padXIn + vwpx + 5, cy + m.val * 0.9);
-    }
-    cy += valLh;
-    // 排名
-    ctx.fillStyle = col.dim; ctx.font = font(m.rank, 400);
-    const pre = '排名第 ';
-    ctx.fillText(pre, px + padXIn, cy + m.rank * 0.95);
-    const preW = ctx.measureText(pre).width;
-    ctx.fillStyle = col.ink; ctx.font = font(m.rankB, 700);
-    const rkTxt = String(t.rank);
-    ctx.fillText(rkTxt, px + padXIn + preW, cy + m.rank * 0.95);
-    const rkW = ctx.measureText(rkTxt).width;
-    ctx.fillStyle = col.dim; ctx.font = font(m.rank, 400);
-    ctx.fillText(` / ${t.total}`, px + padXIn + preW + rkW, cy + m.rank * 0.95);
-    cy += rankLh + m.gapS;
-    // 进度条
-    const barW = pw - padXIn * 2;
-    ctx.fillStyle = hexA(col.accent, 0.42);
-    ctx.fillRect(px + padXIn, cy, barW, 3);
-    ctx.fillStyle = col.accent; ctx.shadowColor = col.accent; ctx.shadowBlur = 12;
-    ctx.fillRect(px + padXIn, cy, barW * t.progress, 3);
-    ctx.shadowBlur = 0;
-  }
 
   ctx.restore();
 }

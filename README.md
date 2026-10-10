@@ -15,13 +15,19 @@
 | 配置驱动 | 数据/标题/主题/形状全部来自一个 JSON 配置，零代码改内容 |
 | **双格式数据** | 既吃**内部格式**（`views[].items[]`），也吃**规范数据模板 v2**（`dataset/metrics[]/entities[]`），自动识别、无需转写 |
 | 多视图 | 一个 config 可含多个指标视图（如人口/面积/红色遗址数），分别出片 |
-| 多形状 | 方柱 / 立方体 / 圆柱 / 圆角柱 / 球体，视图级或全局指定，URL 可切换 |
-| **多画幅** | `16:9` / `9:16` / `1:1` / `4:3`，**预览取景框与导出像素同源**（所见即所得） |
+| 多形状 | 方柱 / 立方体 / 圆柱 / 圆角柱 / 球体，视图级或全局指定，URL 可切换；**圆柱为 surface 参数化真圆柱（直壁+平顶，v2.8.1）** |
+| **多画幅** | `16:9` / `9:16` / `1:1` / `4:3`，**预览取景框与导出像素同源**（所见即所得，v2.8.1 修复画布尺寸跟随） |
 | **播放节奏** | 每根柱子弹出间隔（默认 2s）可调，总时长自动推导；也支持直接锁定总时长 |
 | **信息可编辑** | 标题 / 副标题 / 来源 / 备注在页面上直接改，即时同步到画面与出片 |
-| **信息入画（v2.7）** | 标题 / 当前视图 / 当前目标 / 来源备注位于**取景框内部**，随画面缩放；**浏览器内导出 WebM 亦合成信息层**（v2.7.1 修复：此前 `captureStream` 只录 WebGL 画布，导出缺信息层） |
+| **信息入画（v2.7）** | 标题 / 当前视图 / 来源备注位于**取景框内部**，随画面缩放；**浏览器内导出 WebM 亦合成信息层**（v2.7.1 修复：此前 `captureStream` 只录 WebGL 画布，导出缺信息层）。**v2.8.3 移除「当前目标」卡**：该卡竖屏下宽达取景框 62.7%、纵跨 57%~81%，是"遮挡柱体严重"的结构性根因，移除后信息层只剩贴边三块，画面中央完全让给柱阵 |
+| **暂停 / 继续（v2.8.3）** | 底部操作分组内、**「重播」之前**；文案与图标随状态切换（⏸暂停 / ▶继续）；支持**空格键**快捷键；仅作用于预览播放，不进出片链路 |
+| **开场可见性（v2.8.3）** | 首根柱**从 t=0 即开始生长**（消除开场空窗），并保证同屏常驻 ≥2 根柱体、其中一根在生长（生长窗口故意重叠 + 注视点偏向生长方向） |
+| **连续跟随（v2.9.0）** | 相机注视点改为**时间连续的出生前沿**（`t/(step·STAGGER)`，线性于 t），彻底消除「每换一根柱整屏硬跳」（单次最大 |Δcx| **6.00 → 0.71**，切换同刻硬跳 **27 → 0**） |
+| **画幅自适应（v2.9.0）** | 跟随期距离按画幅反推（`TARGET_BARS_X = 3.6`）做**下限保证**：竖屏同屏柱数 **1.72 → 3.60** 根（换柱位移占屏比 **58.2% → 27.8%**）；16:9 / 4:3 维持原值零回归 |
+| **单模板往返（v2.10.0）** | **一个 JSON 模板驱动全部动态数据**：点「⤓配置」导出全量配置（视图分类 + 柱体数据 + 元信息 + 主题/形状/画幅/间隔/时长），再导入即整体替换；支持**拖拽导入**与**一键撤销**。往返**逐字节无损**（实测 28 实体 / 3 视图） |
 | 浏览器预览 | `npm run dev`，支持 `?t=` 确定性单帧、URL 参数切视图/主题/形状/画幅/节奏/主角/配置 |
-| CLI 出片 | `npm run render`，自动选编码器、自动 Xvfb、逐帧新浏览器进程、按画幅推导分辨率 |
+| **CLI 出片** | `npm run render`，自动选编码器、自动 Xvfb、**单进程多帧渲染（v2.8.0，比逐帧新进程快 7×）**、按画幅推导分辨率；`--engine perframe` 可切回旧路径，失败自动回退 |
+| **排版单一事实源（v2.8.0）** | 信息层的全部分寸由 `overlay.js:overlayMetrics()` 唯一定义，DOM 预览与 Canvas 录制**同源消费**，预览即出片 |
 
 ### 动画时间轴（`t: 0 → 1`）
 
@@ -29,6 +35,15 @@
 |---|---|---|
 | 逐条出现 | `0 → revealRatio(默认0.72)` | 柱体按指标升序依次弹出（带轻微回弹），镜头连续跟随当前活跃柱 |
 | 拉远收束 | `revealRatio → 1` | 镜头从跟随平滑拉远抬升，收入全部柱体 |
+
+> **生长节奏（v2.8.3 定案）**：第 k 根柱的**生长起点** = `k × step × 0.85`
+> （`step = revealRatio / n`）—— 起点系数 0.85 < 1 使相邻生长窗口**故意重叠**，
+> 于是**同屏常驻 ≥2 根柱体，其中一根正在生长**；且 k=0 的起点恰为 `t=0`，
+> 开场第一帧就有柱体在生长（不再有"空白开场"）。
+> 单根生长时长按**秒**给定（`GROW_SEC = 0.55s`，clamp 在 `step×0.9 ~ step×2.2`），
+> 缓动为「smoothstep 主体 + 衰减回弹余项」`f(u)=(3u²−2u³)+0.16·u⁶·(1−u)³`
+> ——起点斜率 0（真·从 0 生长）、峰值约 +6% 过冲、端点 `f(0)=0`/`f(1)=1`。
+> 已开始的柱在起点帧即有极小**种子高度**（0.6% 满高，约 4px），避免首帧全空。
 
 > 浏览器动画与截帧**共用同一个 `computeFrame(t)` 纯函数**，保证出片与预览逐帧一致（`?t=` 截帧模式由 `BarRace3D.vue` 实现并置 `document.body.dataset.ready='1'`）。
 
@@ -58,7 +73,7 @@ npm run render                      # 出片（默认内置 v2 模板 src/data/h
 | **比例** | `16:9` / `9:16` / `1:1` / `4:3`（带等比小窗图标） |
 | **间隔** | `1s / 1.5s / 2s / 3s / 5s` + 时长读数（自动 / 手动） |
 | 主题 | 全部内置主题 |
-| **数据（v2.7.1 并入）** | 模板 / 导入 CSV / 导出 CSV / 数据表 / 信息（编辑标题/来源/备注）+ 操作反馈 |
+| **数据（v2.7.1 并入，v2.10.0 扩充）** | CSV 模板 / 导入（CSV **或** JSON，也可**拖文件到本栏**）/ 导出 CSV / **⤓配置（导出全量 JSON 模板）** / **↩撤销（撤销最近一次模板导入）** / 数据表 / 信息 + 操作反馈 |
 | 操作 | 重播 / 导出 WebM |
 
 > **自适应降级**：窄屏（≤860px）或竖屏窗口下，dock 自动退回底部横向流式布局，
@@ -70,10 +85,14 @@ npm run render                      # 出片（默认内置 v2 模板 src/data/h
 
 | 元素 | 位置 | 说明 |
 |---|---|---|
-| 标题 / 副标题 | 画面左上 | 限宽自动折行，极窄画幅下占 ≤74% 宽 |
+| 标题 / 副标题 | 画面左上 | 限宽自动折行，极窄画幅下占 ≤74% 宽、副标题限 2 行（v2.8.3） |
 | 当前视图徽标 | 画面右上 | 如「当前视图 · 人口 · 人」 |
-| 当前目标卡片 | 画面左侧居中（竖屏画幅自动落左下） | 名称 / 数值 / 排名 / 揭示进度条 |
-| 来源 / 备注 | 画面左下（竖屏画幅自动移右下） | 对应 v2 模板 `dataset.source` / `dataset.notes[]` |
+| 来源 / 备注 | 画面左下（竖屏画幅自动移右下，限 3 行） | 对应 v2 模板 `dataset.source` / `dataset.notes[]` |
+
+> **v2.8.3：原「当前目标卡片」已移除**（用户指令）。该卡竖屏下宽达取景框 62.7%、
+> 纵跨 57%~81% 且横跨中线，使"左中/左下/右下"三块同时被占、柱阵无处可躲
+> （实测 9:16 重叠率 **70.8%**，来源 81.1%）。移除后三块信息全部**贴边**，
+> 画面中央与两侧主体完全让给柱阵 —— 这是比"挪构图去躲面板"更彻底的解法。
 
 > 屏幕级 UI（控件 dock（含数据分组）/ 数据表 / 信息面板 / 操作提示）在出片模式
 > 自动隐藏，**不会**进入导出画面；上述信息层则**保留**并在 CLI 出片中逐帧一致。
@@ -86,10 +105,13 @@ npm run render                      # 出片（默认内置 v2 模板 src/data/h
 右侧 dock 的操作分组含 **⏺ 导出 WebM**，点击后在浏览器内录制成 `.webm` 并自动下载：
 
 - **信息层合成（v2.7.1 修复）**：`canvas.captureStream()` 只能捕获 WebGL 画布本身，
-  取景框内的信息层（标题/徽标/目标卡/来源）是 DOM，**不在被录制的画布里**
+  取景框内的信息层（标题/徽标/来源）是 DOM，**不在被录制的画布里**
   （v2.7.0 的导出因此缺信息层）。现改为每帧把「WebGL 画布 + Canvas 2D 绘制的信息层」
   合成到离屏画布再取流 —— 导出视频从此**带完整信息层**，且数据与页面 DOM 版同源
   （`src/core/overlay.js` 的 `buildOverlayModel/paintOverlay`）。
+- **操作分组（v2.8.3）**：自左至右为 **⏸暂停/▶继续 → ↻重播 → ⏺导出**。
+  暂停为纯预览交互（出片模式下按钮不可见、空格快捷键被拦截），
+  且 `beginRecord()` 会先解除用户暂停，保证导出后画面正常续播。
 - 采用**确定性逐帧录制**：先 `beginRecord()` 暂停实时循环并归零，再按 30fps 逐帧
   `renderAt(t)` 渲染，每帧 `track.requestFrame()` 主动推帧。
   → 导出内容 = `computeFrame(t)` 全流程，**与浏览器播放逐帧一致，且不受"何时点击"影响**
@@ -221,6 +243,66 @@ npm run render                      # 出片（默认内置 v2 模板 src/data/h
 > 人口 / 面积 / 红色遗址数，会师镇高亮）。旧格式示例 `samples/huining.json` 保留作兼容样本，
 > 另有 `samples/huining-v2.json` 作为 v2 模板的独立可复用样例。
 
+### 模板往返（v2.10.0）—— 一份模板驱动全部动态数据
+
+上面讲的是「v2 模板 → 工具」的**单向**读取。v2.10.0 补齐了回来那一半，形成闭环：
+
+```
+v2 模板 ──adaptV2 / normalizeConfig──▶ 内部 config ──toV2Template──▶ v2 模板
+                                            ▲                        │
+                                            └────── 再导入（整体替换）──┘
+```
+
+**操作**（右侧「数据」分组）
+
+| 按钮 | 行为 |
+|---|---|
+| **⤓配置** | 把**当前全量配置**导出为 v2 JSON 模板并下载（文件名取自标题，如 `会宁县乡镇基础数据对比.v2.json`） |
+| **⬆导入** | 选 CSV **或** JSON。按**内容嗅探**分派：首字符是 `{`/`[` ⇒ 走 JSON 全量替换；否则走 CSV（只替换当前视图的数据行） |
+| **拖拽** | 把文件直接拖到「数据」分组上即完成导入（容器会亮起青色虚线框作为"可放下"反馈）。**只挂在数据分组上，不劫持 3D 视图区**，拖拽旋转/缩放不受影响 |
+| **↩撤销** | 撤销**最近一次模板导入**，整体还原（含视图/主题/形状/画幅等 config 之外的 UI 状态） |
+
+**导出物结构**：在原有 `schemaVersion / dataset / entity / metrics / entities` 之上新增 `render` 段，
+把"与数据无关的展示与规格配置"集中一处：
+
+```jsonc
+{
+  "schemaVersion": "1.0",
+  "dataset": { "name": "…", "source": "…", "notes": ["…"], "highlightEntityId": "huishi" },
+  "entity":  { "idField": "id", "nameField": "name" },
+  "metrics": [ { "key": "population", "label": "人口", "unit": "人" } ],
+  "entities": [ { "id": "huishi", "name": "会师镇", "metrics": { "population": 114130 } } ],
+  "render": {
+    "theme": "tech", "highlightLabel": "重点", "revealRatio": 0.72,
+    "barIntervalMs": 2000, "aspect": "16:9", "defaultShape": "bar"
+    // durationMs / durationExplicit 仅在**用户显式锁定总时长**时才出现
+  }
+}
+```
+
+> **向后兼容**：`render` 段的读取是**字段级双读**（`render.X ?? raw.X`），render 优先、顶层回退。
+> 因此早先把 `theme` / `revealRatio` / `aspect` 写在顶层的模板**不改也能继续用**；导出统一走 `render`。
+
+**「不支持字段」清单** — 以下 v2 字段内部格式并不持有，因此**往返后会丢失**（这是已知且被接受的行为，不会报错）：
+
+| 字段 | 为何无法回写 |
+|---|---|
+| `entity.groupField` / `entity.groupValues` | 当前 3D 赛跑无分组语义，内部不存 |
+| `metrics[].valueType` / `scale` / `sortDefault` / `caliber` / `year` / `group` / `description` | 纯元信息，不参与渲染 |
+| `dataset.id` / `dataset.entityLabel` / `dataset.updatedAt` | 内部格式未持有 |
+| `entities[].extra`（如 `redSites` 明细） | 内部格式未持有 |
+
+**无损性边界**（`scripts/qa/verify-template.mjs` + `config.test.mjs` A/B/C 组守护）
+
+| 来源 | 往返表现 |
+|---|---|
+| **v2 模板**（items 带原生 `_id`） | **逐字节无损**（实测 28 实体 / 3 视图，`JSON.stringify` 完全相等） |
+| **旧格式**（items 无 `_id`） | 会新增 `items[]._id`（由 `slugify(name)` 生成）—— 这是**格式升格**的必然：v2 的 `entities[]` 必须有 id，导出时必须造一个。渲染/数值/顺序全不变，且**第二次起完全幂等** |
+| **无有效视图的模板** | 导入**被拒绝**并提示，**保留当前数据**（不会一次误操作清空工作区） |
+
+**撤销语义**：单层快照 + **编辑后失效**。任何编辑动作（改标题/来源/备注、改间隔/时长/画幅、切视图/主题/形状、改高亮、应用数据表、导入 CSV）都会清掉撤销点，按钮随即置灰。
+这样"撤销"的语义永远只有一种——**撤销这一次导入**，绝不会连带抹掉导入后的手工修改。
+
 ### 形状类型（Shape）
 
 | 形状 | 键名 | 渲染实现 | 适用场景 |
@@ -266,7 +348,8 @@ npm run render                      # 出片（默认内置 v2 模板 src/data/h
 ```
 node scripts/render.mjs --config samples/huining.json [--view area] [--theme tech] \
   [--shape cylinder] [--aspect 16:9] [--interval 2000] \
-  [--frames 180] [--fps 30] [--out out/huining_area.mp4] [--poster out/huining_area.png] [--all-views]
+  [--frames 180] [--fps 30] [--engine single] [--frame-format jpg] \
+  [--out out/huining_area.mp4] [--poster out/huining_area.png] [--all-views]
 ```
 
 | 参数 | 默认 | 说明 |
@@ -280,6 +363,8 @@ node scripts/render.mjs --config samples/huining.json [--view area] [--theme tec
 | `--include-disabled` | 关 | v2 模板中 `enabled:false` / `missingPolicy:disable` 的指标默认被跳过，加此参数强制纳入 |
 | `--frames` | `180` | 截帧数（≥2） |
 | `--fps` | `30` | 输出帧率 |
+| `--engine` | `single` | **出片引擎**（v2.8.0）：`single`=单进程多帧（一次 `launch`，循环截帧，**快约 7×**）/ `perframe`=逐帧新进程（旧路径，隔离性最好）。`single` 失败时自动回退 `perframe` |
+| `--frame-format` | `jpg` | 中间帧格式（v2.8.0）：`jpg`（q95，编码快 2–4×，默认）/ `png`（像素级无损，慢）。最终 mp4 不受影响 |
 | `--out` | `out/<configName>_<view>.<编码器扩展名>` | 输出视频路径（多视图时自动插入 `_<view>`） |
 | `--poster` | `out/<configName>_<view>.png` | 海报图（首帧）路径 |
 | `--all-views` | — | 渲染该 config 的全部视图 |
@@ -315,7 +400,7 @@ node scripts/render.mjs --config samples/planets.json --all-views --aspect 1:1 -
 
 ## 四·五、质量保障（QA）
 
-内置七套验证脚本（均可直接运行，无需手动先起 dev server）：
+内置十二套验证脚本（均可直接运行，无需手动先起 dev server）：
 
 ```bash
 # —— npm 快捷入口（推荐）——
@@ -323,17 +408,29 @@ npm test                # 纯逻辑单元测试（无需浏览器）
 npm run qa              # verify.mjs + interact.mjs（需 chromium + Xvfb）
 npm run qa:aspect       # 画幅比例 ↔ 导出像素 一致性（需 chromium + Xvfb）
 npm run qa:playback     # 真实播放模式全程采样（自动构建 + 自启静态服务）
-npm run qa:overlay      # 录制合成信息层像素验证：标题/徽标/目标卡/来源在 3 画幅全部入合成帧（v2.7.1 新增）
+npm run qa:overlay      # 录制合成信息层像素验证：标题/徽标/来源在 3 画幅全部入合成帧（v2.7.1 新增，v2.8.3 增补"原目标卡区已清空"断言）
+npm run qa:geometry     # 信息层 DOM ↔ Canvas 几何收敛：四画幅锚点逐项对齐（v2.8.0 新增，v2.8.3 增补 .target-panel 已移除断言）
+npm run qa:perf         # 出片性能回归：单帧耗时上限 / 无空白帧 / 无上下文丢失累积（v2.8.0 新增）
+npm run qa:fixes3       # 三缺陷回归：画幅驱动画布 / 圆柱直壁平顶剖面 / 尾部相机 C¹ 平滑（v2.8.1 新增）
+npm run qa:fixes4       # 三缺陷回归：暂停续播 / 开场首柱可见 / 同屏≥2根柱体（v2.8.3 新增）
+npm run qa:fixes5       # 连续注视点 + 画幅自适应取景回归（v2.9.0 新增）
+npm run qa:template     # 单模板往返：导入/导出/撤销/拖拽/通道分派（v2.10.0 新增）
 npm run qa:all          # 一键跑全部 QA
 
 # —— 直接调用 ——
-node scripts/qa/config.test.mjs     # 纯逻辑单元测试：配置规范化 / 数据健壮性 / v2 模板适配 / 画幅与间隔推导 / 信息层模型口径（无需浏览器）
+node scripts/qa/config.test.mjs     # 纯逻辑单元测试：配置规范化 / 数据健壮性 / v2 模板适配 / **模板往返无损（A/B/C 组）** / 画幅与间隔推导 / 信息层模型口径 / overlayMetrics 契约（无需浏览器）
 node scripts/qa/verify.mjs          # 构图硬指标（全景+跟随期）/ 形状渲染 / v2 模板直出 / 逐条出现 / 镜头跟随 / 确定性 / 标签覆盖与换行 / WebGL 上下文丢失
 node scripts/qa/verify-aspect.mjs   # 画幅与间隔：四种比例取景框比例 == 所选比例 / 全景相机未被 maxDistance 钳制 / 各比例出片非空白 / interval 推导时长 / 导出像素 / 边界回退
 node scripts/qa/interact.mjs        # 交互回归：视图·主题·比例·间隔切换 / 信息面板 / 重播 / 数据表 / CSV / portrait 口径 / 控制台异常
 node scripts/qa/mk-preview-v2.mjs   # 工具：用 v2 模板数据集生成预览图（需已构建 dist/）
 node scripts/qa/verify-playback.mjs # 真实播放模式全程采样：断言无空白帧（自动构建 dist + 自启静态服务）
 node scripts/qa/verify-overlay.mjs  # 录制合成信息层：WebGL 画布 + 信息层合成后各分区确有绘制（v2.7.1 新增）
+node scripts/qa/verify-geometry.mjs # DOM 信息层 vs Canvas 度量：四画幅锚点对齐 + --ov-* == overlayMetrics()（v2.8.0 新增）
+node scripts/qa/perf.mjs            # 出片性能回归；加 --compare 可对单进程 / 逐帧方案做 A/B 并打印加速比（v2.8.0 新增）
+node scripts/qa/verify-fixes3.mjs   # 三缺陷回归：①画幅比例驱动 3D 画布 ②cylinder 剖面=直壁平顶（surface 实现）③尾部相机单调无抖（v2.8.1 新增）
+node scripts/qa/verify-fixes4.mjs   # 三缺陷回归：①暂停/继续按钮与进度冻结 ②开场首柱可见（含 t=0 首帧种子）③同屏 ≥2 根柱体（v2.8.3 新增）
+node scripts/qa/verify-fixes5.mjs   # 连续注视点连续性 + 各画幅同屏柱数下限（v2.9.0 新增）
+node scripts/qa/verify-template.mjs # 模板往返端到端：①JSON 导入全量替换 ②撤销逐字段复原（含 config 外的 UI 状态）③导出产物合法且闭环无损 ④CSV/JSON 通道分派 ⑤拖拽导入且不劫持 3D 视图（v2.10.0 新增，44 项断言）
 ```
 
 > 截图/中间产物默认写入系统临时目录（`os.tmpdir()`），可用环境变量 `QA_ART=/your/dir` 覆盖。
@@ -363,15 +460,24 @@ node scripts/qa/verify-overlay.mjs  # 录制合成信息层：WebGL 画布 + 信
 | 导出像素（v2.6.0 新增） | 长边恒 1920 且为偶数：`16:9→1920×1080`、`9:16→1080×1920`、`1:1→1920×1920`、`4:3→1920×1440`；`ffprobe` 实测竖屏出片确为 1080×1920 ✅ |
 | 播放间隔（v2.6.0 新增） | `?interval=3000` → 时长按 `4×3000/0.72=16667ms` 推导；间隔↑则时长严格单调↑；2s 为默认值 ✅ |
 | 信息编辑（v2.6.0 新增） | 标题改动即时同步到舞台 `header`（QA 实测「QA 标题校验」）；`source`/`notes` 与 `subtitle` 并存 ✅ |
-| **信息入画（v2.7.0 新增）** | 标题 / 徽标 / 目标卡 / 来源在**四种画幅 × 编辑/出片**下全部落在取景框内、互不重叠（重叠面积=0）；出片模式照常渲染并进入导出帧 ✅ |
+| **信息入画（v2.7.0 新增）** | 标题 / 徽标 / 来源在**四种画幅 × 编辑/出片**下全部落在取景框内、互不重叠；出片模式照常渲染并进入导出帧 ✅（v2.8.3 起不再含目标卡） |
 | **右栏避让（v2.7.0 新增）** | 5 档窗口（1920×1080 → 1024×768）下右栏与取景框重叠恒为 0px²，取景框按可用区居中（`--vp-dx`）✅ |
-| **录制合成信息层（v2.7.1 新增）** | `qa:overlay` 20/20：3 画幅 × 跟随期/全景下，合成帧相对纯 WebGL 画布在标题区/徽标区/目标卡区/来源区均有新增亮像素（修复前来源区横屏 0）✅ |
-| 配置单元测试 | 117/117 通过 ✅（v2.7.1 增补 3 项：信息层模型横/竖口径与排版 clamp） |
-| QA 汇总 | 45/45 通过 ✅ |
-| 画幅 QA | 32/32 通过 ✅（v2.6.0 新增，含相机钳制守卫） |
-| 交互回归 | 10/10 通过 ✅（v2.7.1 增补 9:16 portrait 口径断言） |
-| 播放回归 | 41 采样 0 空白帧 ✅（v2.7.1 复测） |
-| CLI 出片（v2.7.1 复测） | `--aspect 9:16 --frames 3` → poster 确认标题左上/徽标右上/目标卡左下/来源右下，全部在画面内 ✅ |
+| **录制合成信息层（v2.7.1 新增）** | `qa:overlay`：3 画幅 × 跟随期/全景下，合成帧相对纯 WebGL 画布在标题区/徽标区/来源区均有新增亮像素；**v2.8.3 增补**：原目标卡区着墨 **0 px**、overlay 模型已无 `target` 字段 ✅ |
+| **出片提速（v2.8.0 新增）** | 1920×1080 / 30 帧同机 A/B：逐帧新进程 **95.4 s（3.18 s/帧）** → 单进程多帧 **13.6 s（0.21 s/帧）** = **7.0×（↓85.7%）**；`ffprobe` 复核 `1920×1080, 30 fps, 31 帧` ✅ |
+| **GL 回读路径（v2.8.0 实测）** | `--use-gl=swiftshader` vs `--use-angle=swiftshader`：CDP 截屏 946 ms → 193 ms（**4.04×**，三轮交叉验证稳定）。这是提速的主要来源，而非进程启动 ✅ |
+| **信息层几何收敛（v2.8.0 新增）** | `qa:geometry`：16:9 / 9:16 / 1:1 / 4:3 下 DOM 锚点（标题左上、徽标右上、来源落位）与 `overlayMetrics()` **逐项对齐（容差 2 px）**，`--ov-*` CSS 变量 == JS 度量；**v2.8.3 增补** `.target-panel === null` 断言 ✅ |
+| **暂停 / 继续（v2.8.3 新增）** | `qa:fixes4` ① 组 18 项：按钮位于「重播」之前、点击切换文案/图标/aria-pressed、**暂停期间进度冻结**（0.047355 → 0.047355 差 0）、续播恢复推进、空格键等价、暂停态点重播可恢复、出片模式不可见 ✅ |
+| **开场首柱可见（v2.8.3 新增）** | `qa:fixes4` ② 组：**t=0 首帧柱体像素 0 → 1378**（种子高度）；t=0.005/0.03/0.05 逐档断言"有柱体 / 不贴边（两侧 ≥8%）/ 有柱在生长 / 已达物理同屏上限" ✅ |
+| **同屏 ≥2 根柱体（v2.8.3 新增）** | `qa:fixes4` ③④ 组：t=0.05 柱阵横向跨度 **13%~41%（1 簇）→ 21%~69%（3 簇）**、柱阵中心 **≈27% → 45%（画面中央带）**；圆柱模式同样满足 ✅ |
+| 配置单元测试 | **124/124** 通过 ✅（v2.8.3 增补 `!('target' in model)` 字段级断言） |
+| QA 汇总（verify） | **45/45** 通过 ✅ |
+| 画幅 QA | **32/32** 通过 ✅（含相机钳制守卫） |
+| 交互回归 | **10/10** 通过 ✅ |
+| 播放回归 | 50 采样 **0 空白帧** ✅（v2.8.3 复测） |
+| 性能回归（v2.8.0 新增） | `qa:perf` **4/4**：全帧非空白 / 生成 mp4 / 单帧 ≤2.5 s / 无上下文丢失累积 ✅ |
+| 三缺陷回归 v2.8.1 | `qa:fixes3` **18/18** ✅ |
+| 三缺陷回归 v2.8.3 | `qa:fixes4` **48/48** ✅ |
+| CLI 出片（v2.8.3 复测） | `--view population --frames 40` → 1920×1080 mp4 正常；**抽帧确认第 0 帧首柱种子可见、第 4 帧"3 根满高 + 1 根正在生长"四柱同框** ✅ |
 
 > **WebGL 上下文容错说明**：`BarRace3D` 监听 `webglcontextlost`/`webglcontextrestored`。
 > 丢失时 `preventDefault()` 并暂停渲染循环；恢复时重建 ECharts 实例并重放最后一帧。
@@ -394,10 +500,11 @@ huining-3d-vue/            （npm 包名已改为 bar-chart-reveal）
 │   ├── departments.json   # 某科技公司部门季度产出（合成示例）
 │   └── planets.json       # 太阳系行星基础参数（近似值示例）
 ├── scripts/
-│   ├── render.mjs         # 出片 CLI（配置驱动；支持 --aspect / --interval）
+│   ├── render.mjs         # 出片 CLI（配置驱动；--aspect/--interval/--engine/--frame-format）
 │   ├── capture.mjs        # 旧入口薄封装 → render.mjs --all-views
-│   ├── lib/capture-core.mjs  # 出片管线核心（Xvfb/编码器/截帧/合成）
-│   └── qa/                # 质量保障：config.test.mjs + verify.mjs + verify-aspect.mjs + interact.mjs + verify-playback.mjs + verify-overlay.mjs
+│   ├── lib/capture-core.mjs  # 出片管线核心（Xvfb/编码器/单进程多帧+CDP截帧/逐帧回退）
+│   └── qa/                # 质量保障：config.test.mjs + verify.mjs + verify-aspect.mjs + interact.mjs
+│                          #          + verify-playback.mjs + verify-overlay.mjs + verify-geometry.mjs + perf.mjs
 ├── src/
 │   ├── core/config.js     # 配置规范化 + base64url 编解码 + DEFAULT/SAMPLE
 │   ├── core/adapt.js      # v2 数据模板 → 内部格式适配层（纯逻辑）
@@ -415,12 +522,16 @@ huining-3d-vue/            （npm 包名已改为 bar-chart-reveal）
 
 ---
 
-## 六、踩坑记录（出片管线四条铁律）
+## 六、踩坑记录（出片管线铁律）
 
-1. **每帧必须用全新浏览器进程**：持久复用浏览器连开数十页会让 swiftshader 的 WebGL 上下文耗尽，会话崩溃。→ `capture-core` 每帧 `puppeteer.launch` 全新进程。
-2. **不要用 chromium CLI 的 `--screenshot` / `--virtual-time-budget`**：该模式下 GPU 进程不启动、WebGL 不可用，截出 *"Sorry, your browser doesn't support WebGL."* 空白页；且空白 PNG 体积也会超过阈值被误判有效帧。→ 改用 puppeteer 并等待 `document.body.dataset.ready === '1'` 再截。
-3. **页面务必用 `127.0.0.1` 访问**：chromium 会把 `localhost` 优先解析成 IPv6 `::1`，而服务若只监听 IPv4 就连不上，同样截出空白页。→ 静态服务显式监听 `0.0.0.0`，页面用 `127.0.0.1`。
-4. **无显示器环境自动拉起 Xvfb**：否则 ANGLE/WebGL 退化为极慢软件路径甚至超时；且不能只看 `DISPLAY` 是否存在（很多环境预设了实际不可用的 `:0`）。→ 用 `xdpyinfo` 实际探测，不可用再自建 Xvfb。
+1. **不必每帧新开进程（v2.8.0 修正）**：早期结论是「持久复用浏览器连开数十页会让 swiftshader 的 WebGL 上下文耗尽」——**方向对但代价过大**：每帧 `puppeteer.launch()` 让 30 帧多花约 82 s（实测 95.4 s → 13.6 s）。
+   正确做法是**单进程多帧 + 主动管理上下文**：一次 `launch`，每 60 帧 `endRecord→resize→beginRecord` 分段重建；同时监听 `getContextLossCount()`，一旦发现丢失立即重建。既不耗尽上下文，也不必反复付进程冷暖启的代价。`--engine perframe` 保留为隔离兜底，并在单进程失败时自动回退。
+2. **GL 回读路径比进程启动贵一个数量级（v2.8.0 实测）**：`--use-angle=swiftshader` 下 CDP 截屏 946 ms，换成 `--use-gl=swiftshader` 只要 193 ms（**4.04×**，三轮交叉验证）。瓶颈在 ANGLE 的截图回读，不在进程启动（后者仅 0.85 s/帧）。**先量再优化**——本轮最初误以为瓶颈是进程冷启。
+3. **不要用 chromium CLI 的 `--screenshot` / `--virtual-time-budget`**：该模式下 GPU 进程不启动、WebGL 不可用，截出 *"Sorry, your browser doesn't support WebGL."* 空白页；且空白 PNG 体积也会超过阈值被误判有效帧。→ 改用 puppeteer 并等待 `document.body.dataset.ready === '1'` 再截。
+4. **页面务必用 `127.0.0.1` 访问**：chromium 会把 `localhost` 优先解析成 IPv6 `::1`，而服务若只监听 IPv4 就连不上，同样截出空白页。→ 静态服务显式监听 `0.0.0.0`，页面用 `127.0.0.1`。
+5. **无显示器环境自动拉起 Xvfb**：否则 ANGLE/WebGL 退化为极慢软件路径甚至超时；且不能只看 `DISPLAY` 是否存在（很多环境预设了实际不可用的 `:0`）。→ 用 `xdpyinfo` 实际探测，不可用再自建 Xvfb。
+   ★ 若脚本内部已调 `setupDisplay()`（自建 Xvfb），**不要再套一层 `xvfb-run`** —— 嵌套会造成启动挂起。
+6. **`renderAt(t)` 后要等两个 rAF 再截帧**：echarts-gl 的实际绘制发生在下一个 `requestAnimationFrame`，立即截帧会拿到上一帧的画面。
 
 > 额外工程教训（可视化层）：
 > - echarts-gl 的 `bar3D` **不支持函数式 label 配置**（`offset`/`distance`/`formatter` 传函数会被静默忽略甚至导致标签消失）——标签样式必须传常量；本项目改为**逐数据项常量 `label`**（`formatter` 传字符串、逐项开关 `show`）。

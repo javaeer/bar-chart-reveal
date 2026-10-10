@@ -165,6 +165,11 @@ export function normalizeConfig(raw, opts = {}) {
   //     · 未给 durationMs 但给了 barIntervalMs → 由柱体数量推导；
   //     · 两者都未给 → 保持默认 7200（与旧默认一致）。
   //   推导在统计完 views 后进行（需要柱体数量），此处只先解析用户显式值。
+  //   ★ v2.10.0：额外接受 `_durationExplicit`（内部标记）/ `durationExplicit`（v2 模板
+  //     render 段写法）。adaptV2 会把 v2 的 render.durationExplicit 映射为 `_durationExplicit`
+  //     透传到这里；同时为兼容手写配置，也认 `durationExplicit` 直写字段。
+  //     语义：只有**确实带了一个正数 durationMs** 时该标记才有意义（没有值可锁）。
+  const durExplicitFlag = raw._durationExplicit === true || raw.durationExplicit === true;
   let dm = Number(raw.durationMs);
   const dmGiven = Number.isFinite(dm) && dm > 0;
   if (raw.durationMs != null && !dmGiven) {
@@ -173,6 +178,9 @@ export function normalizeConfig(raw, opts = {}) {
   if (dmGiven) {
     out.durationMs = Math.round(dm);
     out._durationExplicit = true;
+  } else if (durExplicitFlag) {
+    // 带了"显式"标记却没有可用值 → 标记无效，提示一句并保持推导
+    warns.push('durationExplicit 为 true 但未提供有效的 durationMs，已按间隔推导');
   }
 
   // —— barIntervalMs（每根柱子弹出间隔，clamp 到 [0.2s, 20s]）——

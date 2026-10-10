@@ -35,6 +35,7 @@
         :duration="config.durationMs"
         :capture-t="captureT"
         @active="onActive"
+        @paused="onPaused"
       />
 
       <!-- ★ 画面内信息层（overlay）：随取景框缩放，属于"视频内容"的一部分。
@@ -56,19 +57,6 @@
           <span class="k">当前视图</span>
           <span class="v">{{ activeView.label }}<i v-if="activeView.unit"> · {{ activeView.unit }}</i></span>
         </div>
-
-        <!-- 跟随镜头的当前目标卡片：左侧垂直居中（画面内），出片时保留 -->
-        <transition name="fade">
-          <div v-if="active && active.shown" class="target-panel">
-            <div class="tp-head"><span class="tp-dot"></span>当前目标</div>
-            <div class="tp-name">{{ active.name }}</div>
-            <div class="tp-val">
-              {{ active.value.toFixed(activeView.fixed) }}<i>{{ activeView.unit }}</i>
-            </div>
-            <div class="tp-rank">排名第 <b>{{ active.rank }}</b> / {{ active.total }}</div>
-            <div class="tp-bar"><i :style="{ width: (active.revealed / active.total * 100) + '%' }"></i></div>
-          </div>
-        </transition>
 
         <!-- 数据来源 / 备注：左下角（画面内），有内容才渲染 -->
         <div v-if="config.source || (config.notes && config.notes.length)" class="vp-source">
@@ -99,6 +87,7 @@
       :interval-ms="config.barIntervalMs"
       :duration-ms="config.durationMs"
       :duration-locked="dsState.durationLocked"
+      :paused="playPaused"
       @update:view="setView"
       @update:theme="setTheme"
       @update:shape="setShape"
@@ -106,6 +95,7 @@
       @update:interval="setBarInterval"
       @update:duration="setDuration"
       @replay="onReplay"
+      @toggle-pause="onTogglePause"
       @open-table="tableOpen = true"
       @open-info="infoOpen = true"
     />
@@ -129,7 +119,7 @@
     />
 
     <div class="hint" :class="{ hidden: capture }">
-      拖拽旋转 · 滚轮缩放 · 数据可编辑 / 可导入导出 · 比例与时长可调
+      拖拽旋转 · 滚轮缩放 · 空格暂停/继续 · 数据可编辑 / 可导入导出 · 比例与时长可调
     </div>
   </div>
 </template>
@@ -160,6 +150,8 @@ const {
   state: dsState, activeView, theme,
   setView, setTheme, setShape, setHighlight,
   setMeta, setBarInterval, setDuration, setAspect, aspectRatio,
+  // ★ v2.10.0：模板导入撤销状态（仅供调试观测口读取，UI 由 MetricBar 自行消费）
+  canUndoImport: dsCanUndoImport,
 } = ds;
 const config = computed(() => dsState.config); // reactive: { title, subtitle, source, notes, revealRatio, durationMs, barIntervalMs, aspect, views, ... }
 const viewKey = computed(() => dsState.viewKey);
@@ -202,13 +194,57 @@ const active = ref(null);
 // （逐帧确定性录制，避免"点导出时动画已播完 → 只录到静止结尾帧"）
 watch(chartRef, (c) => { window.__barRace = c || null; }, { immediate: true });
 
+// ★ v2.10.0：给 QA 一个**只读**的全量状态观测口。
+//   为什么需要：BarRace3D 只收 items/unit/theme 等渲染 props，**不持有完整 config**
+//   （标题/来源/备注/画幅/间隔/视图清单都不在里面），因此基于 __barRace 的探针
+//   测不到"导入是否真的替换了元信息与视图分类"。这里把 useDataset 的状态挂出来，
+//   让 scripts/qa/verify-template.mjs 能断言端到端的替换结果。
+//   安全性：只暴露 getConfig 读取函数，不暴露任何 setter；仅在 ?debug=1 时挂载，
+//   正常使用（无 query）下 window.__barRaceDS 为 undefined，不扩大对外接口面。
+if (params.get('debug') === '1') {
+  // 返回深拷贝：避免测试侧的读取被 Vue 响应式代理"激活"而干扰依赖收集
+  window.__barRaceDS = {
+    getConfig: () => JSON.parse(JSON.stringify(dsState.config)),
+    getUiState: () => ({
+      viewKey: dsState.viewKey,
+      themeKey: dsState.themeKey,
+      shapeKey: dsState.shapeKey,
+      durationLocked: dsState.durationLocked,
+      canUndoImport: dsCanUndoImport.value === true,
+    }),
+  };
+}
+
 // ★ 信息层数据提供者（v2.7.1 修复"录制丢失标题/信息面板"）：
 //   浏览器内【导出 WebM】走 canvas.captureStream()，**只能捕获 WebGL 画布**，
 //   DOM 覆盖层（标题/当前视图/当前目标/来源）不在其中 → 导出视频缺信息。
 //   这里把「构造信息层数据模型」的纯函数暴露出去，由录制器把
 //   ①WebGL 画布 + ②用 Canvas 2D 原生绘制的信息层 合成到同一张离屏 canvas 后再录制。
 //   数据与页面 DOM 版同源（buildOverlayModel 只吃 props 快照，不读 DOM）。
+// ★ 信息层单一数据模型（v2.8.0）：DOM 预览层与 Canvas 录制层共用同一个 model。
+//
+// 【为什么】此前 DOM 版排版在 CSS 里用 `--ov-*` 令牌（clamp(var(--vp-w)*k)）表达，
+//   Canvas 版在 overlay.js:overlayMetrics() 用同组系数表达 —— 两处数值近似但**分头维护**，
+//   改一处易漏另一处（v2.7.1 就曾出现"竖屏落位对不上"的漂移）。
+//
+// 【现在】buildOverlayModel() 是唯一几何事实源：
+//   · Canvas 录制层：paintOverlay(ctx, model) 直接消费（overlay.js）
+//   · DOM 预览层：下方 overlayModel 计算属性 → cssVars 注入 --ov-* 像素值 → CSS 只做落位
+//   CSS 不再自带比例系数，只负责"把 m.* 的 px 摆到正确位置"，从根上消除数值漂移。
+const overlayModel = computed(() => buildOverlayModel({
+  config: config.value,
+  view: activeView.value,
+  active: active.value,
+  theme: theme.value,
+  size: vpSize.value,
+  portrait: vpPortrait.value,
+}));
+
+// 把模型度量暴露给模板（模板里用 ovModel.m.* 绑定内联样式）
+const ovModel = overlayModel;
+
 window.__brOverlayProvider = () => {
+  // 录制层与预览层同源：直接复用同一个 model（尺寸取实测取景框）
   const vp = document.querySelector('.viewport');
   const size = vp
     ? { w: Math.round(vp.clientWidth), h: Math.round(vp.clientHeight) }
@@ -321,18 +357,50 @@ onMounted(() => {
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { measureDock(); computeVpSize(); });
 });
 
-const cssVars = computed(() => ({
-  '--cy': theme.value.accent,
-  '--cy-dim': hexToRgba(theme.value.accent, 0.42),
-  '--ink': theme.value.ink,
-  '--vp-w': `${vpSize.value.w}px`,
-  '--vp-h': `${vpSize.value.h}px`,
-  // 取景框水平偏移：右侧有控制面板时左移，居中到"可用区"，避免与面板重叠
-  '--vp-dx': `${vpDx.value}px`,
-  // 取景框内可用宽度（减两侧画面留白）：供标题 / 来源等限宽，避免窄画幅下文字溢出画面。
-  // v2.7 起画面内信息直接以 % 限宽（相对 .viewport），此变量作为上限兜底。
-  '--ui-avail': `${Math.max(80, vpSize.value.w - 80)}px`,
-}));
+const cssVars = computed(() => {
+  // 信息层排版度量：**直接取自 overlay.js 的 overlayMetrics()**（与 Canvas 录制层同源）。
+  // CSS 端不再自带 clamp 系数，只消费这里的 px —— 改比例只需改 overlay.js 一处。
+  const m = ovModel.value.m;
+  return {
+    '--cy': theme.value.accent,
+    '--cy-dim': hexToRgba(theme.value.accent, 0.42),
+    '--ink': theme.value.ink,
+    '--vp-w': `${vpSize.value.w}px`,
+    '--vp-h': `${vpSize.value.h}px`,
+    // 取景框水平偏移：右侧有控制面板时左移，居中到"可用区"，避免与面板重叠
+    '--vp-dx': `${vpDx.value}px`,
+    // 取景框内可用宽度（减两侧画面留白）：供标题 / 来源等限宽，避免窄画幅下文字溢出画面。
+    // v2.7 起画面内信息直接以 % 限宽（相对 .viewport），此变量作为上限兜底。
+    '--ui-avail': `${Math.max(80, vpSize.value.w - 80)}px`,
+    // —— 信息层排版度量（唯一事实源 = overlay.js:overlayMetrics）——
+    '--ov-pad-x': `${m.padX}px`,
+    '--ov-pad-y': `${m.padY}px`,
+    '--ov-title': `${m.title}px`,
+    '--ov-sub': `${m.sub}px`,
+    '--ov-sub-indent': `${m.subIndent}px`,
+    // ★ v2.8.3：「当前目标」卡已移除，但下列 --ov-* 仍继续注入——
+    //   overlayMetrics() 是"CSS 与 Canvas 的共用契约"（qa:geometry 断言
+    //   变量值 == 度量函数输出、且字段集合完整），保留注入即保持契约可验证；
+    //   无 DOM 消费者时它们只是未被引用的自定义属性，零副作用。
+    '--ov-name': `${m.name}px`,
+    '--ov-val': `${m.val}px`,
+    '--ov-panel-w': `${m.panelW}px`,
+    '--ov-panel-pad-y': `${m.panelPadY}px`,
+    '--ov-panel-pad-x': `${m.panelPadX}px`,
+    '--ov-bar-gap': `${m.barGapS}px`,
+    '--ov-chip-k': `${m.chipK}px`,
+    '--ov-chip-v': `${m.chipV}px`,
+    '--ov-chip-pad-y': `${m.chipPadY}px`,
+    '--ov-chip-pad-kx': `${m.chipPadKX}px`,
+    '--ov-chip-pad-vx': `${m.chipPadVX}px`,
+    '--ov-rank': `${m.rank}px`,
+    '--ov-rank-b': `${m.rankB}px`,
+    '--ov-unit': `${m.unit}px`,
+    '--ov-src': `${m.src}px`,
+    '--ov-dot': `${m.dot}px`,
+    '--ov-gap-s': `${m.gapS}px`,
+  };
+});
 
 // 展示用像素标签（长边 1920 下该比例对应的导出分辨率）
 const framePx = computed(() => {
@@ -354,9 +422,52 @@ function hexToRgba(hex, a) {
 }
 
 function onActive(a) { active.value = a; }
-function onReplay() { chartRef.value && chartRef.value.replay(); }
+function onReplay() {
+  // 重播 = 从头播放 → 必然解除暂停。组件内部 play() 已重置 paused，
+  // 这里同步 UI 状态，避免按钮仍显示"继续"。
+  playPaused.value = false;
+  chartRef.value && chartRef.value.replay();
+}
 function onApply(items) { ds.applyItems(items); }
 function onApplyMeta(meta) { setMeta(meta); ds.flash('信息已更新 ✓'); }
+
+// ══════════ ★ v2.8.3：暂停 / 继续播放 ══════════
+// 【分层】真正的播放控制住在 BarRace3D（它独占 rAF 时间轴），
+//   这里只做两件事：①把用户意图转发下去；②接住组件抛回的 'paused' 事件、
+//   驱动 MetricBar 按钮文案。App 不自行推断暂停状态（避免与组件内部真值漂移）。
+// 【出片隔离】capture 模式（?t=…）下按钮不渲染，键盘快捷键也被 onTogglePause 拦截 ——
+//   暂停纯属"预览播放"的交互能力，绝不能污染确定性出片链路。
+const playPaused = ref(false);
+function onTogglePause() {
+  // 出片/截帧模式不响应（该模式下无 rAF 播放，暂停无意义且可能影响出片）
+  if (capture) return;
+  const c = chartRef.value;
+  if (!c || typeof c.togglePause !== 'function') return;
+  const nowPaused = c.togglePause(); // 返回切换后的暂停态（true=已暂停）
+  playPaused.value = !!nowPaused;
+}
+// 组件内部因上下文丢失/恢复、重播等改变了暂停态时，同步回来（单一真值在组件侧）
+function onPaused(p) { playPaused.value = !!p; }
+// 空格键快捷键：空格是"播放/暂停"的行业惯例（视频播放器通用）。
+// 排除三类场景，避免误触：
+//   ① 焦点在输入框/文本域/下拉/可编辑元素上时 → 空格属于"输入空格字符"；
+//   ② 焦点在按钮上时 → 空格会触发按钮点击，交给按钮自身处理（否则会双触发）；
+//   ③ 带修饰键（Ctrl/Alt/Meta）→ 属浏览器/系统快捷键，不抢。
+function onKeydown(e) {
+  if (e.code !== 'Space' && e.key !== ' ') return;
+  if (e.ctrlKey || e.altKey || e.metaKey) return;
+  const el = e.target;
+  const tag = el && el.tagName ? el.tagName.toLowerCase() : '';
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+  if (el && el.isContentEditable) return;
+  if (tag === 'button' || (el && el.closest && el.closest('button'))) return;
+  e.preventDefault();
+  onTogglePause();
+}
+if (typeof window !== 'undefined' && !capture) {
+  window.addEventListener('keydown', onKeydown);
+  onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
+}
 
 // 惰性调试钩子：仅当 URL 含 debug=1 时暴露"规范化后的配置/视图清单"（供端到端验证
 // 断言 v2 模板是否被正确识别与适配）。生产 / 出片路径完全不写入全局状态。
@@ -573,19 +684,13 @@ body {
 
 /* ============================================================
    画面内信息排版（相对取景框定位）
-   · 采用"取景框百分比 + 上下限 clamp"：随取景框缩放而缩放，
-     同时避免极窄（9:16）或极宽屏下文字过大/过小。
-   · 用 --vp-w/--vp-h 派生一组排版变量，供本区块各处复用。
+   ★ v2.8.0：比例系数**不再写在这里**。全部 --ov-* 由 JS 从
+     overlay.js:overlayMetrics() 注入（见 cssVars），与 Canvas 录制层同源。
+     本区块 CSS 只负责"把已有的 px 摆到正确位置 + 处理落位/换行/层级"。
    ============================================================ */
-.vp-overlay {
-  --ov-pad-x: clamp(14px, calc(var(--vp-w, 100vw) * 0.030), 44px);
-  --ov-pad-y: clamp(12px, calc(var(--vp-h, 100vh) * 0.038), 34px);
-  --ov-title:  clamp(15px, calc(var(--vp-w, 100vw) * 0.0146), 30px);
-  --ov-sub:    clamp(10px, calc(var(--vp-w, 100vw) * 0.0080), 15px);
-  --ov-name:   clamp(17px, calc(var(--vp-w, 100vw) * 0.0174), 34px);
-  --ov-val:    clamp(20px, calc(var(--vp-w, 100vw) * 0.0209), 42px);
-  --ov-panel-w: clamp(160px, calc(var(--vp-w, 100vw) * 0.152), 300px);
-}
+/* 注：--ov-pad-x/y、--ov-title、--ov-sub、--ov-name、--ov-val、--ov-panel-w
+   （以及 _ov-chip-k/v、--ov-rank/_b、--ov-unit、--ov-src、--ov-dot、--ov-gap-s）
+   定义位置：App.vue <script> 的 cssVars 计算属性。 */
 
 /* —— 标题（画面左上）—— */
 header {
@@ -597,8 +702,8 @@ header {
 header.hidden { display: none; }
 header .brand { display: flex; align-items: center; gap: var(--space-2); }
 header .dot {
-  width: clamp(6px, calc(var(--vp-w, 100vw) * 0.0063), 13px);
-  height: clamp(6px, calc(var(--vp-w, 100vw) * 0.0063), 13px);
+  width: var(--ov-dot);
+  height: var(--ov-dot);
   border-radius: 50%; background: var(--cy); flex: none;
   box-shadow: 0 0 12px var(--cy); animation: pulse 1.8s ease-in-out infinite;
 }
@@ -608,8 +713,8 @@ header h1 {
   text-shadow: 0 0 20px var(--cy-dim); line-height: 1.22;
 }
 header .sub {
-  margin-top: clamp(4px, calc(var(--vp-h, 100vh) * 0.009), 10px);
-  padding-left: clamp(10px, calc(var(--vp-w, 100vw) * 0.0125), 26px);
+  margin-top: var(--ov-gap-s);
+  padding-left: var(--ov-sub-indent);
   font-size: var(--ov-sub); color: var(--text-muted);
   letter-spacing: 1px; line-height: 1.5;
 }
@@ -624,63 +729,23 @@ header .sub {
 }
 .metric-chip.hidden { display: none; }
 .metric-chip .k {
-  padding: clamp(4px, calc(var(--vp-h, 100vh) * 0.008), 9px) clamp(7px, calc(var(--vp-w, 100vw) * 0.008), 16px);
-  font-size: clamp(9px, calc(var(--vp-w, 100vw) * 0.0057), 13px);
+  padding: var(--ov-chip-pad-y) var(--ov-chip-pad-kx);
+  font-size: var(--ov-chip-k);
   letter-spacing: 2px; color: #8fb6cf; background: var(--cy-dim);
 }
 .metric-chip .v {
-  padding: clamp(4px, calc(var(--vp-h, 100vh) * 0.008), 9px) clamp(8px, calc(var(--vp-w, 100vw) * 0.0104), 20px);
-  font-size: clamp(11px, calc(var(--vp-w, 100vw) * 0.0073), 17px);
+  padding: var(--ov-chip-pad-y) var(--ov-chip-pad-vx);
+  font-size: var(--ov-chip-v);
   font-weight: 700; letter-spacing: 1.2px; color: var(--cy);
   text-shadow: 0 0 14px var(--cy-dim);
 }
 .metric-chip .v i { font-style: normal; font-weight: 600; color: #8fb6cf; }
 
-/* —— 跟随目标面板（画面左侧垂直居中，随取景框缩放）—— */
-.target-panel {
-  position: absolute; left: var(--ov-pad-x); top: 50%; transform: translateY(-50%); z-index: var(--z-ui);
-  width: var(--ov-panel-w); min-width: 0;
-  padding: clamp(9px, calc(var(--vp-h, 100vh) * 0.016), 19px) clamp(10px, calc(var(--vp-w, 100vw) * 0.012), 24px);
-  border: 1px solid var(--panel-border-strong); background: var(--panel-bg-strong);
-  backdrop-filter: blur(6px); pointer-events: none;
-  clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px));
-  box-shadow: var(--glow), inset 0 0 22px rgba(53, 232, 255, .05);
-}
-.tp-head {
-  display: flex; align-items: center; gap: 7px;
-  font-size: clamp(9px, calc(var(--vp-w, 100vw) * 0.0057), 13px);
-  letter-spacing: 2.5px; color: #79a6c4;
-}
-.tp-dot { width: 6px; height: 6px; background: var(--cy); box-shadow: 0 0 9px var(--cy); flex: none; }
-.tp-name {
-  margin-top: clamp(4px, calc(var(--vp-h, 100vh) * 0.009), 10px);
-  font-size: var(--ov-name); font-weight: 700; letter-spacing: 2px; color: var(--ink);
-  text-shadow: 0 0 18px var(--cy-dim); line-height: 1.2;
-}
-.tp-val {
-  margin-top: 5px; font-size: var(--ov-val); font-weight: 800; letter-spacing: 1px; color: var(--cy);
-  text-shadow: 0 0 20px var(--cy-dim); font-variant-numeric: tabular-nums; line-height: 1.15;
-}
-.tp-val i {
-  font-size: clamp(10px, calc(var(--vp-w, 100vw) * 0.0073), 17px);
-  font-style: normal; margin-left: 5px; color: #7fb6d1; font-weight: 600;
-}
-.tp-rank {
-  margin-top: clamp(4px, calc(var(--vp-h, 100vh) * 0.009), 10px);
-  font-size: clamp(9px, calc(var(--vp-w, 100vw) * 0.0063), 14px);
-  letter-spacing: 1.4px; color: var(--text-dim);
-}
-.tp-rank b { color: var(--ink); font-size: clamp(11px, calc(var(--vp-w, 100vw) * 0.0078), 18px); }
-.tp-bar { margin-top: clamp(5px, calc(var(--vp-h, 100vh) * 0.011), 12px); height: 3px; background: var(--cy-dim); opacity: .9; overflow: hidden; border-radius: 2px; }
-.tp-bar i { display: block; height: 100%; background: var(--cy); box-shadow: 0 0 12px var(--cy); transition: width var(--t-base) ease-out; }
-.fade-enter-active, .fade-leave-active { transition: opacity var(--t-base) var(--ease), transform var(--t-base) var(--ease); }
-.fade-enter-from, .fade-leave-to { opacity: 0; transform: translateY(-50%) translateX(-8px); }
-
-/* —— 来源 / 备注（画面左下角，随取景框缩放）—— */
+/* —— 数据来源 / 备注（画面左下角，随取景框缩放）—— */
 .vp-source {
   position: absolute; left: var(--ov-pad-x); bottom: var(--ov-pad-y); z-index: var(--z-ui);
   max-width: min(58%, var(--ui-avail, 58%));
-  font-size: clamp(8px, calc(var(--vp-w, 100vw) * 0.0052), 12px);
+  font-size: var(--ov-src);
   line-height: 1.55; letter-spacing: .6px; color: var(--text-faint);
   pointer-events: none;
 }
@@ -704,27 +769,28 @@ header .sub {
      · 极窄画幅下画面内信息的大小/密度微调（避免拥挤）。
    ============================================================ */
 
-/* —— 竖构图画幅（9:16 / 1:1 等）：标题限宽、目标面板移到左下，避免纵向拥挤 ——
+/* —— 竖构图画幅（9:16 / 1:1 等）：标题限宽，避免纵向拥挤 ——
    ★ v2.7.1：由窗口媒体查询改为 .viewport.portrait 类（取景框自身宽高比驱动）。
      原媒体查询按**窗口**方向判定，宽屏窗口里切 9:16 画幅时不会命中，
      而 Canvas 录制层（overlay.js）按**取景框**判定 → 两层落位不一致，
-     预览与出片观感对不上。现在两层同口径（取景框 h>w）。 */
-/* 标题：竖构图下只占左上，避开右上徽标；副标题限宽防溢出 */
+     预览与出片观感对不上。现在两层同口径（取景框 h>w）。
+   ★ v2.8.3：移除「当前目标」卡后，竖屏空间大幅释放（实测原本该卡占 57%~82% 纵带、
+     且宽达取景框 62.7%，是"遮挡柱体严重"的结构性根因）。现竖屏只需约束标题与来源。
+     副标题限 2 行：长备注性文字不应吃掉画面顶部。 */
 .viewport.portrait header { max-width: 74%; }
-.viewport.portrait header .sub { max-width: 100%; }
-/* 目标面板：贴左下（不与居中的柱群抢中线），宽度按取景框自适应 */
-.viewport.portrait .target-panel {
-  left: var(--ov-pad-x);
-  top: auto; bottom: calc(var(--ov-pad-y) + 4.2em);
-  transform: none;
-  width: var(--ov-panel-w); max-width: 66%;
+.viewport.portrait header .sub {
+  max-width: 100%;
+  display: -webkit-box; -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2; line-clamp: 2;
+  overflow: hidden;
 }
-.viewport.portrait .fade-enter-from,
-.viewport.portrait .fade-leave-to { opacity: 0; transform: translateX(-8px); }
-/* 来源与目标面板同列时下移会被遮挡 → 竖构图下来源移到右下角 */
+/* 来源与备注：竖构图下移到右下角（避免与左下标题区冲突） */
 .viewport.portrait .vp-source {
   left: auto; right: var(--ov-pad-x); bottom: var(--ov-pad-y);
   text-align: right; max-width: 56%;
+  display: -webkit-box; -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3; line-clamp: 3;
+  overflow: hidden;
 }
 
 /* —— 极窄屏幕（手机竖屏）：取景框纵向铺满，信息层继续等比（无需断点重排）—— */

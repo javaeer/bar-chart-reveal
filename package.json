@@ -1,6 +1,6 @@
 {
   "name": "bar-chart-reveal",
-  "version": "2.7.1",
+  "version": "2.10.0",
   "description": "配置驱动的 3D 柱状赛跑可视化与出片工具（Vue3 + ECharts-GL，任意数据集/主题/标题/形状）",
   "type": "module",
   "engines": {
@@ -20,7 +20,13 @@
     "qa:aspect": "node scripts/qa/verify-aspect.mjs",
     "qa:playback": "node scripts/qa/verify-playback.mjs",
     "qa:overlay": "node scripts/qa/verify-overlay.mjs",
-    "qa:all": "npm test && node scripts/qa/verify.mjs && node scripts/qa/verify-aspect.mjs && node scripts/qa/interact.mjs && node scripts/qa/verify-playback.mjs && node scripts/qa/verify-overlay.mjs"
+    "qa:geometry": "node scripts/qa/verify-geometry.mjs",
+    "qa:fixes3": "node scripts/qa/verify-fixes3.mjs",
+    "qa:fixes4": "node scripts/qa/verify-fixes4.mjs",
+    "qa:perf": "node scripts/qa/perf.mjs",
+    "qa:all": "npm test && node scripts/qa/verify.mjs && node scripts/qa/verify-aspect.mjs && node scripts/qa/interact.mjs && node scripts/qa/verify-playback.mjs && node scripts/qa/verify-overlay.mjs && node scripts/qa/verify-geometry.mjs && node scripts/qa/verify-fixes3.mjs && node scripts/qa/perf.mjs && node scripts/qa/verify-fixes4.mjs && node scripts/qa/verify-fixes5.mjs && node scripts/qa/verify-template.mjs",
+    "qa:fixes5": "node scripts/qa/verify-fixes5.mjs",
+    "qa:template": "node scripts/qa/verify-template.mjs"
   },
   "dependencies": {
     "echarts": "^5.5.1",

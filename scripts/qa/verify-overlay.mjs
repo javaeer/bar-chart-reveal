@@ -1,4 +1,4 @@
-// QA：录制器「合成画布」必须包含信息层（标题/视图徽标/当前目标/来源备注）
+// QA：录制器「合成画布」必须包含信息层（标题/视图徽标/来源备注）
 //
 // 【背景】浏览器内导出 WebM 走 canvas.captureStream()，它只能捕获 WebGL 画布本身，
 //   DOM 覆盖层（.vp-overlay）不在其中 → 导出的视频没有标题与信息面板。
@@ -7,6 +7,11 @@
 // 【本脚本断言】对每种画幅，合成后相对「仅 3D」的新增亮像素要落在正确的分区里。
 //   注意：来源/备注的落位随画幅变化（横屏左下 x=padX，竖屏右下 x=w-padX），
 //   采样区必须同向 —— 早前的假阴性就是因为横屏却采样了右侧区域。
+//
+// 【v2.8.3 变更】「当前目标」卡已彻底移除，故：
+//   · 不再采样 targetZone、不再断言"当前目标卡区已绘制"；
+//   · 该区域现在应当**基本无信息层着墨**（让给柱阵），改断言**画面中央不再有卡片**
+//     （防止卡片被误加回来 —— 与 verify-geometry 的 null 断言互为双保险）。
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
@@ -40,7 +45,7 @@ async function run(page, srv, { label, url, vw, vh }) {
       const b = after[i] + after[i + 1] + after[i + 2];
       if (b - a > 90) added++;
     }
-    // 分区统计（标题区 / 右上徽标区 / 目标卡区 / 左下来源区）
+    // 分区统计（标题区 / 右上徽标区 / 原目标卡区（现应为空）/ 来源区）
     const region = (x0, y0, x1, y1) => {
       let n = 0;
       for (let y = Math.floor(y0); y < Math.floor(y1); y++) {
@@ -54,11 +59,12 @@ async function run(page, srv, { label, url, vw, vh }) {
       return n;
     };
     return {
-      size: { W, H }, modelInfo: { title: model.title, target: model.target && model.target.name, notes: model.notes.length, portrait: model.portrait },
+      size: { W, H }, modelInfo: { title: model.title, hasTarget: 'target' in model, notes: model.notes.length, portrait: model.portrait },
       added,
       titleZone: region(0, 0, W * 0.6, H * 0.22),
       chipZone: region(W * 0.62, 0, W, H * 0.16),
-      targetZone: model.portrait ? region(0, H * 0.55, W * 0.75, H * 0.85) : region(0, H * 0.25, W * 0.35, H * 0.75),
+      // ★ v2.8.3：原「当前目标卡」采样区 —— 卡片已移除，此区应基本无着墨
+      emptyZone: model.portrait ? region(0, H * 0.55, W * 0.75, H * 0.85) : region(0, H * 0.25, W * 0.35, H * 0.75),
       // 来源落位随画幅变化：横屏左下、竖屏右下 —— 采样区必须同向，否则会假阴性
       sourceZone: model.portrait ? region(W * 0.40, H * 0.86, W, H) : region(0, H * 0.84, W * 0.70, H),
     };
@@ -90,8 +96,10 @@ async function run(page, srv, { label, url, vw, vh }) {
       ok(r.added > 500, `${label}: 合成后信息层新增亮像素 ${r.added}（>500）`);
       ok(r.titleZone > 50, `${label}: 标题区已绘制 ${r.titleZone} px`);
       ok(r.chipZone > 50, `${label}: 右上徽标区已绘制 ${r.chipZone} px`);
-      ok(r.targetZone > 50, `${label}: 当前目标卡区已绘制 ${r.targetZone} px`);
-      ok(r.sourceZone > 50, `${label}: 左下来源区已绘制 ${r.sourceZone} px`);
+      // ★ v2.8.3：原目标卡区已让给柱阵 —— 信息层不应再在此着墨
+      ok(r.emptyZone < 50, `${label}: 原「当前目标」卡区已清空 ${r.emptyZone} px（<50，卡片确已移除）`);
+      ok(!r.modelInfo.hasTarget, `${label}: overlay 模型已无 target 字段`);
+      ok(r.sourceZone > 50, `${label}: 来源区已绘制 ${r.sourceZone} px`);
     }
   } finally { await browser.close(); await srv.close(); }
   console.log(`\n==== 合成录制信息层：${fails.length ? fails.length + ' 项失败' : '全部通过'} ====`);

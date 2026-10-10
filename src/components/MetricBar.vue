@@ -134,18 +134,45 @@
          合并理由：原先「右上角数据条 + 右侧控件 dock」两个同侧浮层各自占位，
          既割裂又相互挤压；并入后形成**单一右侧控制栏**，一处管完数据与视图。
          ★ QA 契约：容器仍带 .data-ui 类（interact.mjs 以 `.data-ui button` 选择
-           模板/数据表/信息），使用者的自定义样式亦不受影响。 -->
-    <div class="group data-ui" role="group" aria-label="数据操作">
+           模板/数据表/信息），使用者的自定义样式亦不受影响。
+         ★ v2.10.0：新增「⬇配置 / ↩撤销」两个按钮 + 整个分组支持拖拽导入。
+           文案刻意用「配置」而非「模板」——interact.mjs 用『模板』子串
+           定位旧按钮（.data-ui 内首个含"模板"的按钮），复用该词会撞车。 -->
+    <div
+      class="group data-ui"
+      :class="{ 'drop-hot': dropHot }"
+      role="group"
+      aria-label="数据操作"
+      @dragover.prevent="onDragOver"
+      @dragleave="onDragLeave"
+      @drop.prevent="onDrop"
+    >
       <span class="group-tag">数据</span>
       <div class="seg">
         <button class="seg-btn data" @click="downloadTemplate()" title="下载 CSV 模板">
           <span class="ico" aria-hidden="true">⬇</span>模板
         </button>
-        <button class="seg-btn data" @click="pickFile" title="导入 CSV">
+        <button class="seg-btn data" @click="pickFile" title="导入 CSV / JSON 模板（也可直接拖文件到本栏）">
           <span class="ico" aria-hidden="true">⬆</span>导入
         </button>
-        <button class="seg-btn data" @click="exportCSV()" title="导出 CSV">
+        <button class="seg-btn data" @click="exportCSV()" title="导出当前视图为 CSV">
           <span class="ico" aria-hidden="true">⇩</span>导出
+        </button>
+        <!-- v2.10.0：全量配置导出 / 导入撤销 -->
+        <button
+          class="seg-btn data tpl"
+          @click="exportTemplate()"
+          :title="tplTip"
+        >
+          <span class="ico" aria-hidden="true">⤓</span>配置
+        </button>
+        <button
+          class="seg-btn data undo"
+          :disabled="!canUndoImport"
+          @click="undoImport()"
+          title="撤销最近一次模板导入（导入后若已编辑则不可撤销）"
+        >
+          <span class="ico" aria-hidden="true">↩</span>撤销
         </button>
         <button class="seg-btn data" @click="$emit('open-table')" title="打开数据表">
           <span class="ico" aria-hidden="true">✎</span>数据表
@@ -154,7 +181,17 @@
           <span class="ico" aria-hidden="true">ⓘ</span>信息
         </button>
       </div>
-      <input ref="file" id="file" type="file" accept=".csv,text/csv" hidden @change="onFile" />
+      <!-- accept 同时放行 CSV 与 JSON：具体走哪条通道由 onFile 里的
+           detectKind() 按扩展名 + 内容嗅探决定（不靠 accept 做什么判断，
+           accept 只是文件选择器的过滤器，拖拽路径完全绕过它）。 -->
+      <input
+        ref="file"
+        id="file"
+        type="file"
+        accept=".csv,.json,text/csv,application/json"
+        hidden
+        @change="onFile"
+      />
       <span class="data-msg" :class="{ show: dsMessage }">{{ dsMessage }}</span>
     </div>
 
@@ -162,6 +199,19 @@
     <div class="group" role="group" aria-label="操作">
       <span class="group-tag">操作</span>
       <div class="seg">
+        <!-- ★ v2.8.3：暂停 / 继续（位于「重播」之前，按用户指定位置落位）。
+             文案与图标随 paused 双向切换：暂停态显示 ▶ 继续，播放态显示 ⏸ 暂停。
+             :aria-pressed 让无障碍读屏能感知当前处于暂停态。
+             仅作用预览播放，不影响导出（导出走独立的 beginRecord/renderAt 链路）。 -->
+        <button
+          class="seg-btn act pause"
+          :class="{ on: paused }"
+          :aria-pressed="paused ? 'true' : 'false'"
+          :title="paused ? '继续播放（空格）' : '暂停播放（空格）'"
+          @click="$emit('toggle-pause')"
+        >
+          <span class="ico" aria-hidden="true">{{ paused ? '▶' : '⏸' }}</span>{{ paused ? '继续' : '暂停' }}
+        </button>
         <button class="seg-btn act replay" @click="$emit('replay')">
           <span class="ico" aria-hidden="true">↻</span>重播
         </button>
@@ -193,28 +243,97 @@ const props = defineProps({
   intervalMs: { type: Number, default: 2000 },
   durationMs: { type: Number, default: 9000 },
   durationLocked: { type: Boolean, default: false },
+  // ★ v2.8.3：当前是否处于「用户暂停」态 —— 驱动按钮文案/图标切换。
+  paused: { type: Boolean, default: false },
 });
 const emit = defineEmits([
   'update:view', 'update:theme', 'update:shape',
   'update:aspect', 'update:interval', 'update:duration',
   'replay', 'open-table', 'open-info',
+  // ★ v2.8.3：暂停 / 继续（用户交互）。由 App.vue 转发给 BarRace3D 的 pause()/resume()，
+  //   状态经 :paused prop 回流，用于切换按钮文案与图标。
+  'toggle-pause',
 ]);
 
 const {
   viewList, themeList, state,
-  downloadTemplate, exportCSV, importCSV, message: dsMessage,
+  downloadTemplate, exportCSV, importCSV,
+  importTemplate, exportTemplate, undoImport, canUndoImport,
+  message: dsMessage,
 } = useDataset();
 
+const tplTip = '导出当前全量配置为 JSON 模板（' + state.config.views.length + ' 个视图，可直接再次导入）';
+
 // —— 数据分组（原 DataToolbar 的职责，v2.7.1 并入本面板）——
+
+/**
+ * 判定这份文件走哪条通道：'json'（v2 全量模板）/ 'csv'（单视图数据表）。
+ *
+ * 判据顺序（先看内容嗅探，再看扩展名 —— 顺序很关键）：
+ *   ① 内容以 `{` / `[` 开头（跳过空白与 BOM）⇒ JSON。
+ *      优先用内容而非扩展名，是因为用户常把模板存成 .txt 或干脆改错后缀，
+ *      此时按内容仍能正确识别；反过来一个真 CSV 首字符绝不会是 `{`。
+ *   ② 扩展名 .json ⇒ JSON（内容无法判定时的兜底，如空文件）。
+ *   ③ 其余 ⇒ CSV。
+ */
+function detectKind(f, text) {
+  const body = String(text == null ? '' : text).replace(/^\uFEFF/, '').trimStart();
+  if (body.startsWith('{') || body.startsWith('[')) return 'json';
+  const name = String((f && f.name) || '').toLowerCase();
+  if (name.endsWith('.json')) return 'json';
+  return 'csv';
+}
+
 const file = ref(null);
 function pickFile() { file.value && file.value.click(); }
+
+/** 把已读到的文本按类型分派给对应导入通道 */
+function applyFile(f, text) {
+  const kind = detectKind(f, text);
+  if (kind === 'json') {
+    // 全量替换：内部已做"无有效视图则不覆盖"的保护，失败不会清空工作区
+    importTemplate(text);
+  } else {
+    // CSV 通道保持既有语义：只替换「当前视图」的数据行（不做全量替换）
+    importCSV(text);
+  }
+}
+
+function readAs(f) {
+  const reader = new FileReader();
+  reader.onload = () => applyFile(f, String(reader.result));
+  reader.readAsText(f, 'utf-8');
+}
+
 function onFile(e) {
   const f = e.target.files && e.target.files[0];
   if (!f) return;
-  const reader = new FileReader();
-  reader.onload = () => importCSV(String(reader.result));
-  reader.readAsText(f, 'utf-8');
+  readAs(f);
   e.target.value = '';
+}
+
+// —— 拖拽导入（v2.10.0 新增）——
+// ★ 只挂在「数据」这个分组容器上，**绝不挂到 .viewport**：
+//   3D 视图区已用指针拖拽做旋转/缩放，把 drop 挂上去会与之抢事件。
+const dropHot = ref(false);
+
+function onDragOver() {
+  dropHot.value = true;
+}
+
+function onDragLeave(e) {
+  // 只在真正离开容器时熄灯：鼠标在子元素间移动也会触发 dragleave，
+  // 若不加这层判断，指示灯会随内部元素一路闪烁。
+  if (e && e.currentTarget && e.relatedTarget
+    && e.currentTarget.contains(e.relatedTarget)) return;
+  dropHot.value = false;
+}
+
+function onDrop(e) {
+  dropHot.value = false;
+  const dt = e && e.dataTransfer;
+  const f = dt && dt.files && dt.files[0];
+  if (f) readAs(f);
 }
 
 const shapeList = SHAPES;
@@ -442,7 +561,10 @@ function exportWebM() {
 }
 .seg-btn:active { transform: translateY(1px) scale(0.97); }
 .seg-btn:focus-visible { outline: 2px solid var(--cy); outline-offset: 2px; }
+/* 禁用态：默认 cursor: progress 是给"导出中"用的；但撤销按钮的禁用语义是
+   "无可撤销的导入"，并非进行中，故单独覆盖为 not-allowed 并进一步压暗。 */
 .seg-btn:disabled { opacity: 0.55; cursor: progress; }
+.seg-btn.undo:disabled { cursor: not-allowed; opacity: 0.34; }
 
 /* 选中态：青实心胶囊 + 外发光 */
 .seg-btn.active {
@@ -469,13 +591,38 @@ function exportWebM() {
 .seg-btn .ico { font-size: 13px; line-height: 1; }
 .seg-btn.replay .ico { color: #9fe6c4; }
 .seg-btn.active.replay .ico { color: inherit; }
+/* ★ v2.8.3：暂停按钮 —— 播放态为中性青，暂停态（.on）转为暖琥珀以示"已冻结"。
+   用琥珀而非红色：暂停是中性操作而非错误，且红在这套科技青配色里过于刺眼。
+   .ico 固定等宽，保证 ▶/⏸ 切换时按钮宽度不跳动（避免同排按钮左右抖动）。 */
+.seg-btn.pause .ico {
+  color: #ffd48a; width: 13px; text-align: center;
+  transition: color var(--t-fast) var(--ease);
+}
+.seg-btn.pause.on {
+  background: rgba(255, 196, 92, 0.16);
+  border-color: rgba(255, 196, 92, 0.52);
+  color: #ffe1ad;
+}
+.seg-btn.pause.on .ico { color: #ffc45c; }
 
 /* —— 数据分组（v2.7.1 由右上 DataToolbar 并入的 .group.data-ui）——
    并入后 .data-ui 不再是独立浮层，仅作为「数据分组」的语义钩子（QA / 自定义样式），
    故这里把 .data-ui 的定位与外壳样式显式交还给 .dock 的分组样式（去固定定位）。 */
 .group.data-ui { position: static; }
+/* v2.10.0：拖拽悬停态 —— 整组加青色描边 + 微光，作为"可放下"的视觉反馈。
+   用 outline 而非 border：border 会改变盒模型尺寸导致整条控制栏抖动。 */
+.group.data-ui.drop-hot {
+  outline: 2px dashed rgba(53, 208, 255, 0.75);
+  outline-offset: 4px;
+  border-radius: 12px;
+  background: rgba(53, 208, 255, 0.07);
+  box-shadow: 0 0 22px rgba(53, 208, 255, 0.22);
+}
 .seg-btn.data .ico { font-size: 12px; color: #9ad9f0; }
 .seg-btn.data:hover .ico { color: #eafbff; }
+/* 「配置」按钮用暖色区分于其它数据按钮（它是全量导出，语义更重） */
+.seg-btn.data.tpl .ico { color: #ffd479; }
+.seg-btn.data.tpl:hover .ico { color: #fff2cf; }
 .data-msg {
   font-size: 10px; letter-spacing: .6px; color: #9fe6c4;
   padding-left: 12px; opacity: 0; transition: opacity var(--t-base) var(--ease);

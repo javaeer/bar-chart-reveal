@@ -117,6 +117,8 @@ export function adaptV2(raw, opts = {}) {
     barIntervalMs: undefined,
     aspect: undefined,
     defaultShape: undefined,
+    // 内部标记：durationMs 是用户显式锁定值（透传给 normalizeConfig 的 _durationExplicit）
+    _durationExplicit: undefined,
     views: [],
   };
 
@@ -140,16 +142,36 @@ export function adaptV2(raw, opts = {}) {
     ? dataset.notes.map((n) => asStr(n).trim()).filter(Boolean)
     : [];
   if (notes0.length) out.notes = notes0;
-  // 顶层展示类字段（模板可有可无，缺省交给 normalizeConfig 兜底）
-  if (raw.theme != null) out.theme = raw.theme;
-  if (raw.highlightLabel != null) out.highlightLabel = raw.highlightLabel;
-  if (raw.revealRatio != null) out.revealRatio = raw.revealRatio;
-  if (raw.durationMs != null) out.durationMs = raw.durationMs;
-  if (raw.barIntervalMs != null) out.barIntervalMs = raw.barIntervalMs;
-  // aspect 允许出现在顶层或 dataset 内（模板作者两种写法都常见）
-  if (raw.aspect != null) out.aspect = raw.aspect;
+  // —— ①-b 展示 / 规格类字段：**字段级双读** ——
+  // v2.10.0 起，template.js 把这类"与数据无关的展示配置"集中写进 `render` 段；
+  // 而早先的模板把它们散在顶层。为了让两种位置都能吃（老模板不改也能用），
+  // 这里统一按 `render.X ?? raw.X` 取值：render 优先，顶层回退。
+  // ★ 用 `??` 而非 `||`：0 / false / '' 都是合法取值（如 revealRatio 极小值、显式 false），
+  //   用 || 会被误判为"未提供"而回退到另一处。
+  const render = raw.render && typeof raw.render === 'object' && !Array.isArray(raw.render)
+    ? raw.render
+    : {};
+  const pick = (k) => {
+    const v = render[k] !== undefined && render[k] !== null ? render[k] : raw[k];
+    return v === undefined || v === null ? undefined : v;
+  };
+
+  if (pick('theme') !== undefined) out.theme = pick('theme');
+  if (pick('highlightLabel') !== undefined) out.highlightLabel = pick('highlightLabel');
+  if (pick('revealRatio') !== undefined) out.revealRatio = pick('revealRatio');
+  if (pick('durationMs') !== undefined) out.durationMs = pick('durationMs');
+  if (pick('barIntervalMs') !== undefined) out.barIntervalMs = pick('barIntervalMs');
+  // aspect 允许三处出现：render / 顶层 / dataset 内（模板作者写法不一，全部兼容）
+  if (pick('aspect') !== undefined) out.aspect = pick('aspect');
   else if (dataset.aspect != null) out.aspect = dataset.aspect;
-  if (raw.defaultShape != null) out.defaultShape = raw.defaultShape;
+  if (pick('defaultShape') !== undefined) out.defaultShape = pick('defaultShape');
+  // durationExplicit：显式标记"这个 durationMs 是用户锁定的，不要被间隔推导覆盖"。
+  //   若模板只写了 durationExplicit:true 却没写 durationMs，标记无意义（没有值可锁），
+  //   因此仅当 durationMs 确实存在时才透传，避免下游把推导值误当显式值。
+  if (out.durationMs !== undefined) {
+    const de = pick('durationExplicit');
+    if (de === true) out._durationExplicit = true;
+  }
 
   // —— ② 字段名约定 ——
   const entity = raw.entity && typeof raw.entity === 'object' && !Array.isArray(raw.entity)

@@ -23,7 +23,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { encodeConfig, normalizeConfig, pixelSizeFor, normalizeAspect, deriveDuration } from '../src/core/config.js';
-import { pickEncoder, resolveChromium, renderFrames } from './lib/capture-core.mjs';
+import { pickEncoder, resolveChromium, renderFrames, renderFramesSingleProcess } from './lib/capture-core.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -36,8 +36,13 @@ function parseArgs(argv) {
     config: 'samples/huining-v2.json',
     view: null, theme: null, shape: null, aspect: null, interval: null,
     frames: 180, fps: 30,
+    // v2.8.0：出片引擎与帧格式
+    //   engine: single=单进程多帧（默认，实测 ~2.5-4× 提速）；perframe=逐帧新进程（旧方案兜底）
+    //   frameFormat: jpg=快速（默认，q95 经 x264 后视觉无差）；png=像素级无损（慢）
+    engine: 'single', frameFormat: 'jpg',
     // 原始字符串（用于非法值报错时回显用户实际输入，而非 parseInt 后的 NaN）
     framesArg: null, fpsArg: null, intervalArg: null,
+    engineArg: null, frameFormatArg: null,
     out: null, poster: null,
     allViews: false,
     includeDisabled: false,
@@ -54,6 +59,8 @@ function parseArgs(argv) {
     else if (a === '--interval') { o.intervalArg = argv[++i]; o.interval = parseInt(o.intervalArg, 10); }
     else if (a === '--frames') { o.framesArg = argv[++i]; o.frames = parseInt(o.framesArg, 10); }
     else if (a === '--fps') { o.fpsArg = argv[++i]; o.fps = parseInt(o.fpsArg, 10); }
+    else if (a === '--engine') { o.engineArg = argv[++i]; o.engine = String(o.engineArg).trim().toLowerCase(); }
+    else if (a === '--frame-format') { o.frameFormatArg = argv[++i]; o.frameFormat = String(o.frameFormatArg).trim().toLowerCase(); }
     else if (a === '--out') o.out = argv[++i];
     else if (a === '--poster') o.poster = argv[++i];
     else { console.error('未知参数: ' + a); process.exit(2); }
@@ -104,6 +111,14 @@ export function validateNumericArgs(o) {
 
   if (o.aspect != null && !normalizeAspect(o.aspect)) {
     errors.push(`--aspect 非法，收到「${o.aspect}」，可选：16:9 / 9:16 / 1:1 / 4:3`);
+  }
+
+  // v2.8.0：引擎与帧格式
+  if (!['single', 'perframe'].includes(o.engine)) {
+    errors.push(`--engine 非法，收到「${o.engineArg ?? o.engine}」，可选：single（单进程多帧，默认）/ perframe（逐帧新进程）`);
+  }
+  if (!['jpg', 'png'].includes(o.frameFormat)) {
+    errors.push(`--frame-format 非法，收到「${o.frameFormatArg ?? o.frameFormat}」，可选：jpg（快速，默认）/ png（像素级无损）`);
   }
 
   return errors;
@@ -208,20 +223,53 @@ function main() {
 
       console.log(`\n▶ 渲染 view=${view} (${label}) → ${out}`);
       try {
-        const res = await renderFrames({
-          root,
-          dist: path.join(root, 'dist'),
-          frames: opts.frames,
-          fps: opts.fps,
-          out,
-          poster,
-          urlForFrame,
-          encoder: enc,
-          chromiumPath,
-          // ★ 导出像素：与浏览器预览取景框同一比例 → 预览所见 = 导出所得
-          width,
-          height,
-        });
+        let res = null;
+        // —— v2.8.0：默认走单进程多帧（提速）；失败自动回退逐帧新进程 ——
+        // 环境变量 BAR_CHART_ENGINE=perframe 可强制旧方案（调试用）。
+        const engine = process.env.BAR_CHART_ENGINE === 'perframe' ? 'perframe' : opts.engine;
+        if (engine === 'single') {
+          try {
+            res = await renderFramesSingleProcess({
+              root,
+              dist: path.join(root, 'dist'),
+              frames: opts.frames,
+              fps: opts.fps,
+              out,
+              poster,
+              url: urlForFrame(0, 0, opts.frames),   // 首帧 URL（含全部 cfg 参数，t=0）
+              frameFormat: opts.frameFormat,
+              encoder: enc,
+              chromiumPath,
+              // ★ 导出像素：与浏览器预览取景框同一比例 → 预览所见 = 导出所得
+              width,
+              height,
+            });
+          } catch (eSingle) {
+            console.warn(`⚠ 单进程出片失败（${eSingle.message}），自动回退逐帧新进程方案 ...`);
+            res = null;
+          }
+        }
+        if (!res) {
+          res = await renderFrames({
+            root,
+            dist: path.join(root, 'dist'),
+            frames: opts.frames,
+            fps: opts.fps,
+            out,
+            poster,
+            urlForFrame,
+            encoder: enc,
+            chromiumPath,
+            // ★ 导出像素：与浏览器预览取景框同一比例 → 预览所见 = 导出所得
+            width,
+            height,
+          });
+        }
+        if (res.timing) {
+          console.log(`ℹ 引擎=single 格式=${res.timing.frameFormat} 耗时=${(res.timing.totalMs / 1000).toFixed(1)}s（${(res.timing.perFrameMs / 1000).toFixed(2)}s/帧）`);
+        } else {
+          console.log('ℹ 引擎=perframe（逐帧新进程）');
+        }
         console.log(`✅ 生成: ${res.out}${res.poster ? ' (poster: ' + res.poster + ')' : ''}`);
       } catch (e) {
         console.error(`❌ view=${view} 出片失败: ${e.message}`);

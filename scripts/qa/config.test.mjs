@@ -1,9 +1,12 @@
 // 纯逻辑单元测试：normalizeConfig 的数据健壮性（任务三）
 // 用法：node scripts/qa/config.test.mjs
 // 无外部依赖，不需要浏览器 / 字体 / GL——直接以 Node 运行。
+// ★ v2.10.0：失败时以退出码 1 收尾（见文件末尾），否则 CI / qa:all 会把红色当绿色。
+import { readFileSync } from 'node:fs';
 import { normalizeConfig, truncateName, SHAPES, normalizeShape } from '../../src/core/config.js';
 import { looksLikeV2, adaptV2 } from '../../src/core/adapt.js';
-import { buildOverlayModel } from '../../src/core/overlay.js';
+import { toV2Template, toV2TemplateJSON, slugify, withDefined, V2_UNSUPPORTED_FIELDS } from '../../src/core/template.js';
+import { buildOverlayModel, overlayMetrics } from '../../src/core/overlay.js';
 import {
   ASPECTS, ASPECT_KEYS, DEFAULT_ASPECT, normalizeAspect, ratioOf, pixelSizeFor,
   deriveDuration, intervalFromDuration, DEFAULT_BAR_INTERVAL_MS, INTERVAL_MIN, INTERVAL_MAX,
@@ -552,8 +555,211 @@ ok('video：默认间隔为 2000ms', DEFAULT_BAR_INTERVAL_MS === 2000 && INTERVA
   const land = buildOverlayModel({ ...base, size: { w: 1600, h: 900 }, portrait: false });
   const port = buildOverlayModel({ ...base, size: { w: 456, h: 810 }, portrait: true });
   ok('overlay：横构图模型 portrait=false 且含标题', land.portrait === false && land.title === 'T');
-  ok('overlay：竖构图模型 portrait=true 且 target=null（无活跃柱）', port.portrait === true && port.target === null);
+  // ★ v2.8.3：用户指令「彻底移除当前目标卡」→ 模型不再携带 target 字段。
+  //   断言 `!('target' in model)`：比 `=== null` 更严格，保证字段本身被删除
+  //   （若将来有人把它加回来，此断言立刻失败）。
+  ok('overlay：模型已无 target 字段（v2.8.3 移除当前目标卡）', !('target' in port) && !('target' in land));
+  ok('overlay：竖构图模型 portrait=true', port.portrait === true);
   ok('overlay：竖构图排版度量按取景框宽 clamp', port.m.title <= 30 && port.m.title >= 15, String(port.m.title));
+}
+{
+  // ★ v2.8.0 信息层收敛：overlayMetrics() 是全项目唯一的排版系数来源。
+  //   本组断言锁定"字段集合契约" —— App.vue 的 cssVars 注入与 CSS 消费、
+  //   paintOverlay 的绘制，全都读这些键名；缺键会导致 CSS 变量变成空值（布局塌陷），
+  //   改键名会静默地让 DOM 与 Canvas 漂移。因此逐个键存在性 + 数值合理性都要卡住。
+  const M = overlayMetrics(1600, 900);
+  const KEYS = ['padX', 'padY', 'title', 'sub', 'subIndent', 'name', 'val', 'panelW',
+    'panelPadY', 'panelPadX', 'barGapS', 'chipK', 'chipV', 'chipPadY', 'chipPadKX',
+    'chipPadVX', 'rank', 'rankB', 'unit', 'src', 'dot', 'gapS'];
+  const missing = KEYS.filter((k) => typeof M[k] !== 'number' || !Number.isFinite(M[k]));
+  ok('overlayMetrics：字段集合完整（CSS 与 Canvas 的共用契约）', missing.length === 0, missing.join(','));
+  ok('overlayMetrics：全部为有限正数（无 NaN/0/负值）',
+    KEYS.every((k) => M[k] > 0), JSON.stringify(M));
+  // 单调性：取景框变大 → 度量不减（clamp 区间内应严格增大，触顶后持平）
+  const S = overlayMetrics(800, 450), L = overlayMetrics(2400, 1350);
+  const nonMono = KEYS.filter((k) => !(L[k] >= S[k]));
+  ok('overlayMetrics：随取景框增大单调不减', nonMono.length === 0, nonMono.join(','));
+  // clamp 上下限确实生效（极大/极小尺寸都不越界）
+  const tiny = overlayMetrics(1, 1), huge = overlayMetrics(1e6, 1e6);
+  ok('overlayMetrics：极小尺寸不塌陷（下界生效）',
+    tiny.padX >= 14 && tiny.title >= 15 && tiny.src >= 8, JSON.stringify(tiny));
+  ok('overlayMetrics：极大尺寸不失控（上界生效）',
+    huge.padX <= 44 && huge.title <= 30 && huge.panelW <= 300, JSON.stringify(huge));
+  // 同尺寸幂等（同输入必同输出，保证 DOM/Canvas 两次独立调用不漂移）
+  const a1 = overlayMetrics(1600, 900), a2 = overlayMetrics(1600, 900);
+  ok('overlayMetrics：同输入幂等（DOM/Canvas 两次调用一致）',
+    KEYS.every((k) => a1[k] === a2[k]));
+}
+
+// ───────────────────────────────────────────────────────────
+// A) v2 模板往返无损（v2.10.0「单模板驱动全部动态数据」的地基）
+//   主张：内部 config ──toV2Template──▶ v2 模板 ──normalizeConfig──▶ 同一个内部 config。
+//   用 JSON.stringify 逐字节比较（比字段逐个断言更严格：顺序、多余键、缺键都能抓到）。
+// ───────────────────────────────────────────────────────────
+{
+  const SAMPLE = JSON.parse(readFileSync(new URL('../../samples/huining-v2.json', import.meta.url), 'utf8'));
+  const c1 = normalizeConfig(SAMPLE).config;
+  const { template, warns } = toV2Template(c1);
+  ok('A1 真实样例导出零告警', warns.length === 0, warns.join(' | '));
+  ok('A2 ★ 导出物不含顶层 views（否则会被判成旧格式而丢弃 metrics/entities）',
+    !('views' in template), Object.keys(template).join(','));
+  ok('A3 导出物仍被识别为 v2', looksLikeV2(template) === true);
+  ok('A4 ★ 往返 JSON 逐字节相等（无损核心断言）',
+    JSON.stringify(c1) === JSON.stringify(normalizeConfig(template).config));
+  ok('A5 维度计数：3 视图 / 28 实体',
+    template.metrics.length === 3 && template.entities.length === 28,
+    `${template.metrics.length} 视图 / ${template.entities.length} 实体`);
+  ok('A6 导出物含 render 段（展示配置集中处）',
+    template.render && typeof template.render === 'object' && !Array.isArray(template.render));
+  ok('A7 高亮主角已回写（id 优先）', template.dataset.highlightEntityId === 'huishi',
+    String(template.dataset.highlightEntityId));
+  ok('A8 实体 metrics 与视图 key 一一对应',
+    template.entities.every((e) => Object.keys(e.metrics).every((k) => template.metrics.some((m) => m.key === k))));
+
+  // 显式锁定时长：必须原样往返（含内部标记），否则用户锁的时长会被"推导"覆盖
+  const c3 = { ...c1, durationMs: 12345, _durationExplicit: true };
+  const t3 = toV2Template(c3).template;
+  const b3 = normalizeConfig(t3).config;
+  ok('A9 显式锁定时 durationMs 写入 render', t3.render.durationMs === 12345, String(t3.render.durationMs));
+  ok('A10 显式锁定时 durationExplicit 一并写入', t3.render.durationExplicit === true);
+  ok('A11 显式锁定往返：时长与标记都保持',
+    b3.durationMs === 12345 && b3._durationExplicit === true,
+    `${b3.durationMs} / ${b3._durationExplicit}`);
+  ok('A12 显式锁定往返无损', JSON.stringify({ ...c3, views: b3.views }) === JSON.stringify(b3));
+
+  // 未锁定：绝不能写 durationMs（写了下次导入就被当显式值锁死，丢失自动推导能力）
+  ok('A13 未锁定时 render 不写 durationMs', !('durationMs' in template.render));
+  ok('A14 未锁定时 render 不写 durationExplicit', !('durationExplicit' in template.render));
+
+  // decimals 省略策略：0 值省略（读取端默认即 0），非 0 保留
+  ok('A15 decimals 仅在非 0 时写出',
+    template.metrics.find((m) => m.key === 'area')?.decimals === 1 &&
+    !('decimals' in template.metrics.find((m) => m.key === 'population')),
+    JSON.stringify(template.metrics.map((m) => [m.key, m.decimals])));
+
+  // 二次往返稳定（幂等 —— 模板再导一次结果不变）
+  const t2 = toV2Template(normalizeConfig(template).config).template;
+  ok('A16 toV2Template 幂等（二次导出与首次逐字节相同）',
+    JSON.stringify(t2) === JSON.stringify(template));
+}
+
+// ───────────────────────────────────────────────────────────
+// B) looksLikeV2 判别 + 导出物与旧格式的边界（保护 ?cfg= 契约）
+// ───────────────────────────────────────────────────────────
+{
+  const base = {
+    schemaVersion: '1.0',
+    dataset: { name: 'x' },
+    metrics: [{ key: 'a', label: 'A' }],
+    entities: [{ id: 'e1', name: 'E1', metrics: { a: 1 } }],
+  };
+  ok('B1 纯 v2 形状 → true', looksLikeV2(base) === true);
+  // ★ 这条是 A2 的反面证据：只要带 views 就会被判旧格式，metrics/entities 静默丢弃
+  ok('B2 ★ v2 形状 + 顶层 views → false（这就是导出物绝不能写 views 的原因）',
+    looksLikeV2({ ...base, views: [] }) === false);
+  ok('B3 旧格式（仅 views）→ false',
+    looksLikeV2({ title: 't', views: [{ key: 'a', items: [{ name: 'n', value: 1 }] }] }) === false);
+  ok('B4 render 段不影响判别（判别只看 views/metrics/entities/schemaVersion）',
+    looksLikeV2({ ...base, render: { theme: 'tech' } }) === true);
+  ok('B5 只有 dataset 外壳 → false（交给旧路径告警"缺 views"）',
+    looksLikeV2({ dataset: { name: 'x' } }) === false);
+  ok('B6 null / 数组 / 原始值 → false',
+    looksLikeV2(null) === false && looksLikeV2([]) === false && looksLikeV2('x') === false);
+  ok('B7 半成品 v2（只有 entities）→ true（尽力解析而非丢弃）',
+    looksLikeV2({ entities: base.entities }) === true);
+}
+
+// ───────────────────────────────────────────────────────────
+// C) template.js 工具函数与边界
+// ───────────────────────────────────────────────────────────
+{
+  ok('C1 withDefined 去掉 undefined 但保留 null（null = 明确缺失，语义不同）',
+    JSON.stringify(withDefined({ a: 1, b: undefined, c: null, d: '' })) === '{"a":1,"c":null,"d":""}',
+    JSON.stringify(withDefined({ a: 1, b: undefined, c: null, d: '' })));
+  ok('C2 slugify 保留 ASCII 字母数字并归一分隔符', slugify('Hello World 2026') === 'hello-world-2026',
+    slugify('Hello World 2026'));
+  ok('C3 slugify 对纯中文返回空串（由调用方回退到名称，不强行音译）', slugify('会师镇') === '', `"${slugify('会师镇')}"`);
+  ok('C4 slugify 去首尾连字符且折叠连续分隔符', slugify('  --a  b--  ') === 'a-b', slugify('  --a  b--  '));
+
+  // 缺 _id 的旧格式配置：应能用 name 作主键导出（并给出可读 id）
+  const legacy = normalizeConfig({
+    title: 'L', views: [{ key: 'v1', label: 'V', unit: '个', fixed: 0,
+      items: [{ name: 'A', value: 3 }, { name: 'B', value: 2 }] }],
+  }).config;
+  const lt = toV2Template(legacy).template;
+  ok('C5 旧格式（无 _id）也能导出：按 name 作主键',
+    lt.entities.length === 2 && lt.entities.map((e) => e.name).join(',') === 'A,B',
+    lt.entities.map((e) => e.id).join(','));
+  ok('C6 旧格式导出后仍可被读回为 v2（views/metrics 对齐）',
+    looksLikeV2(lt) === true && normalizeConfig(lt).config.views.length === 1 &&
+    normalizeConfig(lt).config.views[0].items.length === 2);
+
+  // 空配置：不抛异常，只给告警
+  const e1 = toV2Template({ views: [] });
+  ok('C7 空视图配置：不抛异常且给出告警', e1.warns.length === 1 && e1.template.metrics.length === 0,
+    e1.warns.join('|'));
+  const e2 = toV2Template(null);
+  ok('C8 非法输入（null）：不抛异常且给出告警', e2.warns.length === 1, e2.warns.join('|'));
+
+  // 多视图同实体：按 _id 归并成一行（这是 pivot 正确性的关键）
+  const multi = normalizeConfig({
+    views: [
+      { key: 'pop', label: '人口', unit: '人', items: [{ name: '甲', value: 10, _id: 'a' }, { name: '乙', value: 5, _id: 'b' }] },
+      { key: 'area', label: '面积', unit: 'km²', items: [{ name: '甲', value: 100, _id: 'a' }, { name: '乙', value: 50, _id: 'b' }] },
+    ],
+  }).config;
+  const mt = toV2Template(multi).template;
+  ok('C9 多视图 pivot：同 _id 的 2 视图归并为 2 行（不是 4 行）',
+    mt.entities.length === 2 && mt.metrics.length === 2, `${mt.entities.length} 行 / ${mt.metrics.length} 列`);
+  ok('C10 pivot 后每行同时持有两个维度的值',
+    mt.entities.every((e) => e.metrics.pop != null && e.metrics.area != null),
+    JSON.stringify(mt.entities));
+  ok('C11 多视图往返无损（pivot 未丢任何值）',
+    JSON.stringify(multi) === JSON.stringify(normalizeConfig(mt).config));
+
+  // 视图 shape 与顶层 defaultShape 相同时应省略（读取端自然会回退）
+  const sh = normalizeConfig({
+    defaultShape: 'cylinder',
+    views: [{ key: 'v', label: 'V', unit: '', shape: 'cylinder', items: [{ name: 'A', value: 1 }] }],
+  }).config;
+  const sht = toV2Template(sh).template;
+  ok('C12 视图 shape 与 defaultShape 相同时省略，不同时写出',
+    sht.metrics[0].shape === undefined, JSON.stringify(sht.metrics[0]));
+  // ★ 无损性的适用边界（重要，勿删）：
+  //   ① v2 来源的配置（items 带原生 _id）→ 逐字节无损（见 A4）。
+  //   ② 旧格式来源（items 无 _id）→ 往返后会**新增** items[]._id（由 slugify(name) 生成）。
+  //      这不是缺陷，而是"格式升格"的必然结果：v2 模板的 entities[] 必须有 id，
+  //      导出时必须造一个；再导回内部格式时它就落成了 _id（adapt 端本就这么写）。
+  //      影响面可控：仅多一个隐藏标识字段，渲染/数值/顺序全不变，且**第二次起稳定**。
+  //      因此这里的断言分两层：剥掉 _id 后逐字节相等 + 二次往返完全幂等。
+  const stripId = (c) => JSON.stringify({
+    ...c,
+    views: c.views.map((v) => ({ ...v, items: v.items.map(({ _id, ...r }) => r) })),
+  });
+  const shBack1 = normalizeConfig(sht).config;
+  ok('C13 旧格式往返：shape 经 defaultShape 回退保持一致',
+    shBack1.views[0].shape === sh.views[0].shape, `${sh.views[0].shape} → ${shBack1.views[0].shape}`);
+  ok('C13b 旧格式往返：剥掉新增的 _id 后逐字节无损',
+    stripId(sh) === stripId(shBack1));
+  ok('C13c 旧格式往返：_id 由 slugify(name) 生成（稳定可读）',
+    shBack1.views[0].items[0]._id === 'a', String(shBack1.views[0].items[0]._id));
+  ok('C13d 旧格式往返：第二次起完全幂等（不再漂移）',
+    JSON.stringify(shBack1) === JSON.stringify(normalizeConfig(toV2Template(shBack1).template).config));
+
+  // 不支持的字段清单必须非空（README 与文档会引用它）
+  ok('C14 不支持的字段清单已声明（供文档/UI 展示）',
+    Array.isArray(V2_UNSUPPORTED_FIELDS) && V2_UNSUPPORTED_FIELDS.length >= 3,
+    `${V2_UNSUPPORTED_FIELDS.length} 条`);
+
+  // JSON 文本产物可直接 JSON.parse（下载通道用）
+  const j = toV2TemplateJSON(legacy);
+  let parsed = null;
+  try { parsed = JSON.parse(j.text); } catch { /* 下条断言会失败 */ }
+  ok('C15 toV2TemplateJSON 产出合法 JSON 文本',
+    parsed && parsed.schemaVersion === '1.0' && j.text.endsWith('\n'));
 }
 
 console.log(`\n==== 单元测试汇总：${pass}/${pass + fail} 通过 ====`);
+// ★ v2.10.0：补上退出码。此前失败也只 exit 0 ⇒ CI / npm run qa:all 会把红色的
+//   测试当绿色放行（回归防护形同虚设）。这里显式把失败数映射为退出码。
+if (fail > 0) process.exitCode = 1;
