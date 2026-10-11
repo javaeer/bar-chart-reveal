@@ -11,6 +11,13 @@
       </div>
     </template>
 
+    <!-- WebGL 能力预检：部分环境无法创建 WebGL 上下文，ECharts-GL 会直接黑屏且无提示。
+         这里在挂载时探测，给出友好降级提示（屏幕级 UI，出片时隐藏）。 -->
+    <div v-if="webglUnsupported && !capture" class="webgl-warn" role="alert">
+      当前浏览器或环境不支持 WebGL，3D 画面无法渲染。请使用较新的 Chrome / Edge / Firefox，
+      或在浏览器设置中开启硬件加速后重试。
+    </div>
+
     <!-- ★ 取景框（viewport）：画幅比例的**单一事实源**。
          以--vp-w/--vp-h 给出内接矩形尺寸（由 aspectRatio 计算），
          3D 画布只铺满它 → BarRace3D 读到的 aspect 恒等于所选比例，
@@ -121,6 +128,18 @@
     <div class="hint" :class="{ hidden: capture }">
       拖拽旋转 · 滚轮缩放 · 空格暂停/继续 · 数据可编辑 / 可导入导出 · 比例与时长可调
     </div>
+
+    <!-- Demo 产品化：分享链接 + 隐私 / 导出格式边界说明（屏幕级 UI，出片时隐藏） -->
+    <div class="demo-tools" :class="{ hidden: capture }">
+      <button class="share-btn" type="button" @click="copyShareLink" title="复制当前配置的分享链接">
+        复制分享链接
+      </button>
+      <span v-if="shareMsg" class="share-msg">{{ shareMsg }}</span>
+      <p class="demo-note">
+        在线 Demo 纯前端运行：你的配置仅在本地浏览器内解析，不会上传到任何服务器，也无遥测。
+        「导出」默认生成 WebM（浏览器内录制）；如需 MP4，请用本仓库 CLI（npm run render）在本地生成。
+      </p>
+    </div>
   </div>
 </template>
 
@@ -131,7 +150,7 @@ import MetricBar from './components/MetricBar.vue';
 import DataTable from './components/DataTable.vue';
 import InfoPanel from './components/InfoPanel.vue';
 import { useDataset } from './composables/useDataset.js';
-import { decodeConfig, pixelSizeFor } from './core/config.js';
+import { decodeConfig, encodeConfig, pixelSizeFor } from './core/config.js';
 import { buildOverlayModel, paintOverlay } from './core/overlay.js';
 
 // —— 从 URL 读取运行参数 ——
@@ -430,6 +449,45 @@ function onReplay() {
 }
 function onApply(items) { ds.applyItems(items); }
 function onApplyMeta(meta) { setMeta(meta); ds.flash('信息已更新 ✓'); }
+
+// ══════════ ★ Demo 产品化（v2.10.x）：分享链接 / WebGL 预检 / 隐私声明 ══════════
+// 复制分享链接：把当前（可能已被用户编辑过的）配置编码为 ?cfg= 深链，便于一键分享。
+const shareMsg = ref('');
+async function copyShareLink() {
+  if (capture) return;
+  try {
+    const cfg = encodeConfig(config.value);
+    const url = `${location.origin}${location.pathname}?cfg=${cfg}`;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(url);
+    } else {
+      // 降级：临时 textarea + execCommand（旧浏览器 / 非安全上下文）
+      const ta = document.createElement('textarea');
+      ta.value = url; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); document.body.removeChild(ta);
+    }
+    shareMsg.value = '分享链接已复制 ✓';
+  } catch (e) {
+    shareMsg.value = '复制失败，请手动复制地址栏链接';
+  }
+  setTimeout(() => { shareMsg.value = ''; }, 2600);
+}
+
+// WebGL 能力预检：部分环境（无 GPU / 老浏览器 / 禁硬件加速）无法创建 WebGL 上下文，
+// 此时 ECharts-GL 会直接黑屏且无提示。这里在挂载时做一次能力探测，给出友好降级提示。
+const webglUnsupported = ref(false);
+function checkWebGL() {
+  if (typeof document === 'undefined') return;
+  try {
+    const c = document.createElement('canvas');
+    const gl = c.getContext('webgl2') || c.getContext('webgl') || c.getContext('experimental-webgl');
+    webglUnsupported.value = !gl;
+  } catch (e) {
+    webglUnsupported.value = true;
+  }
+}
+checkWebGL();
 
 // ══════════ ★ v2.8.3：暂停 / 继续播放 ══════════
 // 【分层】真正的播放控制住在 BarRace3D（它独占 rAF 时间轴），
@@ -758,6 +816,38 @@ header .sub {
   letter-spacing: .5px; z-index: var(--z-ui); max-width: 40vw; text-align: left; line-height: 1.6;
 }
 .hint.hidden { display: none; }
+
+/* ============================================================
+   Demo 产品化（v2.10.x）：分享工具 + WebGL 预检提示
+   均为屏幕级 UI（出片 hidden），不进画面。
+   ============================================================ */
+.webgl-warn {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 60;
+  padding: 12px 16px; text-align: center;
+  font-size: 13px; letter-spacing: .5px; line-height: 1.6;
+  color: #ffd9d9; background: rgba(120, 20, 20, .92);
+  border-bottom: 1px solid rgba(255, 120, 120, .5);
+}
+.demo-tools {
+  position: fixed; left: 22px; top: 22px; z-index: var(--z-ui);
+  display: flex; flex-direction: column; gap: 8px; max-width: 360px;
+}
+.demo-tools.hidden { display: none; }
+.share-btn {
+  align-self: flex-start;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 12px; font-size: 12px; letter-spacing: .5px;
+  color: var(--cy); background: var(--panel-bg);
+  border: 1px solid var(--panel-border); border-radius: var(--radius-sm);
+  cursor: pointer; backdrop-filter: blur(4px);
+}
+.share-btn:hover { border-color: var(--cy-dim); box-shadow: var(--glow); }
+.share-msg { font-size: 12px; color: #8fe6b0; letter-spacing: .5px; }
+.demo-note {
+  margin: 0; font-size: 11px; line-height: 1.7; color: var(--text-faint);
+  background: var(--panel-bg); border: 1px solid var(--panel-border);
+  border-radius: var(--radius-sm); padding: 8px 10px; backdrop-filter: blur(4px);
+}
 
 /* ============================================================
    响应式适配（v2.7）

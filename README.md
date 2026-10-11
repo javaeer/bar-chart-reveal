@@ -1,10 +1,16 @@
-# 柱状数据揭晓 · 配置驱动可视化与出片工具（bar-chart-reveal）
+# 柱状赛跑 · 配置驱动可视化与出片工具（bar-chart-reveal / bar chart race）
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![CI](https://github.com/javaeer/bar-chart-reveal/actions/workflows/ci.yml/badge.svg)](https://github.com/javaeer/bar-chart-reveal/actions/workflows/ci.yml) [![Deploy Demo](https://github.com/javaeer/bar-chart-reveal/actions/workflows/deploy-pages.yml/badge.svg)](https://github.com/javaeer/bar-chart-reveal/actions/workflows/deploy-pages.yml)
+
 
 > 任意数据集（`[{name, value, highlight?}]`）+ 任意主题 + 任意标题 → **浏览器动画预览** 与 **CLI 出片 MP4**。
 > 不再局限于会宁县：公司部门产出、行星参数、任意「谁大谁小」的对比都能一键成片。
 > 技术栈：Vue3 + Vite + ECharts-GL（3D `bar3D`）+ puppeteer-core + ffmpeg。
 
 ---
+
+> **文档导航**：[架构](docs/architecture.md) · [v2 数据模板](docs/data-template-v2.md) · [CLI 参考](docs/cli-reference.md) · [设计决策](docs/design-decisions.md) · [FAQ](docs/faq.md) · [治理](GOVERNANCE.md) · [路线图](ROADMAP.md) · [英文 README](README.en.md)
+
 
 ## 一、它是什么
 
@@ -177,71 +183,14 @@ npm run render                      # 出片（默认内置 v2 模板 src/data/h
 - `encodeConfig(obj)` / `decodeConfig(str)`：base64url（UTF-8 安全，`+/`→`-_`、去 `=`），浏览器与 Node 通用，用于把配置塞进 URL 的 `cfg=` 参数。
 - `src/core/video.js`（纯逻辑）：导出 `ASPECTS` / `ASPECT_KEYS` / `normalizeAspect` / `ratioOf` / `pixelSizeFor` / `deriveDuration` / `intervalFromDuration`，并被 `config.js` 重新导出——消费方只 import `config.js` 一处即可。
 
-### 数据模板（v2 schema）— 一份模板涵盖全部维度
+### 数据模板（v2 schema）
 
-上面是**内部格式**（以 `views` 为根）。真实数据资产通常另有一份**含全部维度的规范模板**：
-以 `metrics[]` 描述"可比维度"（每个指标 = 一个视图），以 `entities[]` 描述"对象维度"
-（每个实体带一份指标值字典）。此类模板可**直接作为配置使用**——工具会自动识别并适配，
-无需手工转写成内部格式（`src/core/adapt.js`）。
+真实数据资产通常是一份含全部维度的规范模板：以 `metrics[]` 描述「可比维度」（每个指标 = 一个视图），
+以 `entities[]` 描述「对象维度」（每个实体带一份指标值字典）。此类模板**可直接作为配置使用**，
+工具会自动识别并适配，无需手工转写。
 
-```jsonc
-{
-  "schemaVersion": "1.0",
-  "dataset": {
-    "id": "huining",
-    "name": "会宁县乡镇基础数据对比",     // → 标题
-    "source": "会宁县统计年鉴",           // ┐
-    "notes": ["乡镇行政区划口径", "面积含辖域"], // ┘ → 副标题（source + notes 以 " · " 连接）
-    "highlightEntityId": "huishi"        // 可选：把该实体标为高亮主角（也可按显示名匹配）
-  },
-  "entity": { "idField": "id", "nameField": "name", "groupField": "group" },
-  "metrics": [                            // 每个 metric → 一个视图
-    { "key": "population", "label": "常住人口", "unit": "人", "decimals": 0, "missingPolicy": "skip" },
-    { "key": "area",       "label": "行政区域面积", "unit": "km²", "decimals": 1, "missingPolicy": "skip" },
-    { "key": "elevation",  "label": "平均海拔", "unit": "m", "enabled": false, "missingPolicy": "disable" },
-    { "key": "redSiteCount", "label": "红色遗址数", "unit": "个", "missingPolicy": "zero" }
-  ],
-  "entities": [                           // 每个 entity → 一个条目（name + 各指标值）
-    { "id": "huishi", "name": "会师镇", "group": "镇", "metrics": { "population": 114130, "area": 88.2, "redSiteCount": 6 } },
-    { "id": "guochengyi", "name": "郭城驿镇", "group": "镇", "metrics": { "population": 28040, "area": 288.3, "redSiteCount": 1 } }
-  ]
-}
-```
+完整字段映射、`metrics[].enabled` 与 `missingPolicy`、双格式判别规则，见 **[docs/data-template-v2.md](docs/data-template-v2.md)**。
 
-**字段映射**
-
-| 模板字段 | 内部字段 | 说明 |
-|---|---|---|
-| `dataset.name` | `title` | 数据集名称 |
-| `dataset.source` + `dataset.notes[]` | `subtitle` | 以 ` · ` 连接（空项忽略） |
-| `dataset.highlightEntityId` | item `highlight` | 命中实体 `highlight:true`；可用 id 或显示名 |
-| `entity.idField` / `nameField` | item `_id` / `name` | 字段名可自定义，缺省 `id` / `name` |
-| `metrics[].key` / `label` / `short` / `unit` | view `key` / `label` / `short` / `unit` | 一一对应 |
-| `metrics[].decimals` | view `fixed` | 夹紧至 `[0,6]`，非法回退 `0` |
-| `metrics[].shape` | view `shape` | 可选，覆盖顶层 `defaultShape` |
-| `entities[].metrics[key]` | item `value` | 缺失按 `missingPolicy` 处理 |
-| 顶层 `theme` / `defaultShape` / `revealRatio` / `durationMs` | 同名 | 透传 |
-| 顶层 `schemaVersion` | — | 仅用于判别，不参与渲染 |
-
-**`metrics[].enabled` 与 `metrics[].missingPolicy`**
-
-| 字段 | 取值 | 语义 |
-|---|---|---|
-| `enabled` | `true`（默认）/ `false` | `false` = 该指标数据不可用 → **默认整视图跳过**；用 `--include-disabled`（CLI）或 `includeDisabled`（API）强制纳入 |
-| `missingPolicy` | `skip`（默认） | 实体缺该指标值 → **不产出该条目**（视图条数变少） |
-| | `zero` | 实体缺该指标值 → **补 0** 并保留条目 |
-| | `disable` | 只要有实体缺该指标值 → **整视图跳过**（全员有值则正常保留） |
-| `defaultVisible` | `false` | 仍生成视图，但**排序到视图列表末尾**（视觉上次要指标靠后） |
-
-**判别规则（双格式自动兼容）**：出现顶层 `views[]` → 一律按**内部格式**处理；否则命中
-`metrics[]` / `entities[]` / `schemaVersion` 任一 → 判为 **v2 模板**并自动适配。二者互不干扰，
-旧数据文件与 `?cfg=` 契约完全不受影响。适配后的结果会**再次经过 `normalizeConfig`**
-（校验 / 截断 / 去重 / 至少一条），因此两套格式共享同一套兜底逻辑。
-
-> 内置默认数据集已切换为 v2 模板：`src/data/huining-v2.js`（会宁县 28 乡镇、5 个指标维度，
-> 其中 `elevation`/`elevationRange` 标记 `enabled:false` 默认不生成视图 → 默认出 3 个视图：
-> 人口 / 面积 / 红色遗址数，会师镇高亮）。旧格式示例 `samples/huining.json` 保留作兼容样本，
-> 另有 `samples/huining-v2.json` 作为 v2 模板的独立可复用样例。
 
 ### 模板往返（v2.10.0）—— 一份模板驱动全部动态数据
 
@@ -345,58 +294,8 @@ v2 模板 ──adaptV2 / normalizeConfig──▶ 内部 config ──toV2Templ
 
 ## 四、CLI 用法（`scripts/render.mjs`）
 
-```
-node scripts/render.mjs --config samples/huining.json [--view area] [--theme tech] \
-  [--shape cylinder] [--aspect 16:9] [--interval 2000] \
-  [--frames 180] [--fps 30] [--engine single] [--frame-format jpg] \
-  [--out out/huining_area.mp4] [--poster out/huining_area.png] [--all-views]
-```
+出片命令的完整参数表、URL 契约与示例，见 **[docs/cli-reference.md](docs/cli-reference.md)**。
 
-| 参数 | 默认 | 说明 |
-|---|---|---|
-| `--config` | `src/data/huining-v2.js` 内置模板 | 配置路径：**内部格式** `.json` 或 **v2 模板** `.json` 均可（自动识别） |
-| `--view` | 全部视图 | 仅渲染指定 `view` 键；省略则渲染全部（`--all-views` 等价） |
-| `--theme` | 配置内 `theme` | 覆盖主题名 |
-| `--shape` | 配置内 `shape` | 覆盖形状（`bar`/`cube`/`cylinder`/`rounded`/`sphere`） |
-| `--aspect` | 配置内 `aspect`（默认 `16:9`） | **画幅比例**：`16:9` / `9:16` / `1:1` / `4:3`；决定导出像素（长边固定 1920） |
-| `--interval` | 配置内 `barIntervalMs`（默认 `2000`） | **每根柱子弹出间隔**（ms，`200`–`20000`）；会**重算总时长**（`n × interval / revealRatio`） |
-| `--include-disabled` | 关 | v2 模板中 `enabled:false` / `missingPolicy:disable` 的指标默认被跳过，加此参数强制纳入 |
-| `--frames` | `180` | 截帧数（≥2） |
-| `--fps` | `30` | 输出帧率 |
-| `--engine` | `single` | **出片引擎**（v2.8.0）：`single`=单进程多帧（一次 `launch`，循环截帧，**快约 7×**）/ `perframe`=逐帧新进程（旧路径，隔离性最好）。`single` 失败时自动回退 `perframe` |
-| `--frame-format` | `jpg` | 中间帧格式（v2.8.0）：`jpg`（q95，编码快 2–4×，默认）/ `png`（像素级无损，慢）。最终 mp4 不受影响 |
-| `--out` | `out/<configName>_<view>.<编码器扩展名>` | 输出视频路径（多视图时自动插入 `_<view>`） |
-| `--poster` | `out/<configName>_<view>.png` | 海报图（首帧）路径 |
-| `--all-views` | — | 渲染该 config 的全部视图 |
-
-页面 URL 契约：`/?t=<0..1>&view=<viewKey>&theme=<themeName>&shape=<shape>&aspect=<比例>&interval=<ms>&highlight=<id|名称>&cfg=<base64url(configJSON)>`（capture 模式隐藏 UI）。
-其中 `highlight=` 用于运行时指定高亮主角（可写实体 id 如 `huishi` 或显示名如 `会师镇`，传空即清除）；
-`aspect=` / `interval=` 由出片脚本自动带上，使浏览器取景框与导出像素严格一致。
-
-示例：
-```bash
-# 会宁县默认数据集（v2 模板）的全部视图各出一片
-npm run render
-
-# 用 v2 模板出片，并强制纳入被禁用的指标维度
-node scripts/render.mjs --config samples/huining-v2.json --all-views --include-disabled
-
-# 竖屏短视频：9:16 → 导出 1080×1920（同一份配置，仅换画幅）
-node scripts/render.mjs --config samples/huining-v2.json --view redSiteCount --shape sphere --aspect 9:16
-
-# 放慢节奏：每根柱子 3s（总时长按 28 项 × 3000 / 0.72 ≈ 116.7s 自动推导）
-node scripts/render.mjs --config samples/huining-v2.json --view population --interval 3000
-
-# 仅渲染部门示例的 Q4，自定义帧率与输出
-node scripts/render.mjs --config samples/departments.json --view q4 --fps 24 --out out/dept_q4.mp4
-
-# 行星直径 + 质量两个视图（方形画幅）
-node scripts/render.mjs --config samples/planets.json --all-views --aspect 1:1 --frames 240
-```
-
-> 旧入口 `scripts/capture.mjs` 保留为薄封装：`node scripts/capture.mjs [frames]` ≡ `render.mjs --config samples/huining.json --all-views [--frames N]`。
-
----
 
 ## 四·五、质量保障（QA）
 
@@ -538,3 +437,10 @@ huining-3d-vue/            （npm 包名已改为 bar-chart-reveal）
 > - **构图是第一优先级**：相机 `distance` 与 `boxWidth` 必须按柱体数量自适应（本项目按柱体外接框反推距离，使全景占宽 ≥62%）。曾因相机拉太远（distance≈138、boxWidth=52）导致柱子缩成小点、画面 90% 空白——这是最典型的"看上去很科技、其实没内容"翻车。
 > - **极值悬殊数据**：线性高度会让小值柱体被压成"纸片"（如行星质量 木星 317.8 vs 水星 0.055）。`computeFrame` 对高度系数设下限 `hFrac = H_FLOOR + (1-H_FLOOR)*ratio`（`H_FLOOR=0.08`），保证每根柱体可见；颜色与标签仍用真实值。
 > - **主题必须贯穿**：App 侧 HUD（网格/地平线/面板/进度条）的颜色要经 CSS 变量（`--cy`/`--cy-dim`）取自主题，避免"切换主题但 HUD 还是青色"的割裂。
+
+---
+
+## 许可证
+
+本项目以 **MIT 许可证**开源，详见 [LICENSE](LICENSE)。
+第三方依赖许可证见 [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md)。
