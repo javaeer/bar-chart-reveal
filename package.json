@@ -30,8 +30,8 @@
     "qa:template": "node scripts/qa/verify-template.mjs"
   },
   "dependencies": {
-    "echarts": "^5.5.1",
-    "echarts-gl": "^2.0.9",
+    "echarts": "^6.1.0",
+    "echarts-gl": "^2.1.0",
     "papaparse": "^5.4.1",
     "vue": "^3.4.27"
   },
