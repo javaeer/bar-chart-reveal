@@ -1,0 +1,34 @@
+name: License Check
+
+# 第三方许可证门禁：安装依赖后扫描生产依赖，若发现 Copyleft 许可证
+# （GPL / AGPL / LGPL / MPL）则让流水线失败；同时生成完整许可证清单作为产物。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  license:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Fail on copyleft licenses
+        run: npx --yes license-checker --production --failOn "GPL;AGPL;LGPL;MPL"
+      - name: Generate full license list
+        run: npx --yes license-checker --production --relativeLicensePath > THIRD-PARTY-LICENSES.txt
+      - name: Upload full license list
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: third-party-licenses
+          path: THIRD-PARTY-LICENSES.txt
+          retention-days: 5

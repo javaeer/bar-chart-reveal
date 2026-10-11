@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # 仅配置 npm（仓库以 package-lock.json 为准，pnpm-lock.yaml 已删除）
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+
+  # 自动更新 GitHub Actions，避免工作流 Action 版本陈旧
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "github-actions"

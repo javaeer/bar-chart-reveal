@@ -1,0 +1,63 @@
+name: 缺陷报告 (Bug Report)
+description: 报告一个可复现的问题
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: input
+    id: node
+    attributes:
+      label: Node 版本
+      description: 运行 `node -v` 的输出
+      placeholder: "v20.11.0"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: 操作系统
+      description: 系统版本与发行版
+      placeholder: "Ubuntu 22.04 / macOS 14 / Windows 11"
+    validations:
+      required: true
+  - type: dropdown
+    id: entry
+    attributes:
+      label: 你使用哪种方式运行？
+      options:
+        - "npm run dev（Vite 开发预览）"
+        - "dist-single/index.html（单文件离线版）"
+        - "npm run render（出片）"
+        - "其他 / 不确定"
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      description: 尽量给出最小复现路径（配置 / 数据 / 命令）
+      placeholder: |
+        1. npm ci
+        2. npm run render --cfg samples/planets.json
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+      description: 附上报错日志或截图
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: 环境补充（可选）
+      description: chromium 路径、是否中文环境、相关日志等
+    validations:
+      required: false

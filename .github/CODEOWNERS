@@ -1,0 +1,18 @@
+# CODEOWNERS —— 即使当前为单人维护，也建议设置，为未来协作者做准备。
+
+# 默认负责人
+*                     @javaeer
+
+# 核心纯逻辑模块
+/src/core/            @javaeer
+
+# QA 脚本
+/scripts/qa/          @javaeer
+
+# CI / 发布工作流
+/.github/workflows/   @javaeer
+
+# 治理与安全文档
+/SECURITY.md          @javaeer
+/CODE_OF_CONDUCT.md   @javaeer
+/CODEOWNERS           @javaeer

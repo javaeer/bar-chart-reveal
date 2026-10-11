@@ -1,0 +1,59 @@
+name: Release
+
+# 仅在打 tag（v*）时触发：渲染示例 MP4 + 构建单文件 Demo + 生成 GitHub Release。
+# 不引入 semantic-release / release-please，保留手写 CHANGELOG.md 的可读性。
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install system deps (chromium + ffmpeg + CJK fonts)
+        # 与现有 CI 的 qa job 保持一致的渲染依赖（chromium / xvfb / 中文字体），并补 ffmpeg。
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser xvfb fonts-noto-cjk ffmpeg
+      - run: npm ci
+      - name: Unit tests
+        run: npm test
+      - name: Render example MP4(s)
+        env:
+          CHROMIUM_PATH: chromium-browser
+        run: npm run render
+      - name: Build single-file demo
+        run: npm run build:single
+      - name: Extract release notes from CHANGELOG
+        run: |
+          node -e "
+          const fs=require('fs');
+          const md=fs.readFileSync('CHANGELOG.md','utf8');
+          const tag=process.env.GITHUB_REF_NAME.replace(/^v/,'');
+          const re=new RegExp('## \\\\[v'+tag.replace(/[.]/g,'\\\\.')+'\\\\]');
+          const m=md.match(re);
+          if(!m){ fs.writeFileSync('RELEASE_NOTES.md','See CHANGELOG.md'); process.exit(0); }
+          const start=m.index;
+          const next=md.indexOf('\n## [', start+2);
+          const end=next===-1?md.length:next;
+          fs.writeFileSync('RELEASE_NOTES.md', md.slice(start,end).trim());
+          "
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          body_path: RELEASE_NOTES.md
+          fail_on_unmatched_files: false
+          files: |
+            out/*.mp4
+            out/*.png
+            dist-single/index.html
+            dist-single/favicon.svg
