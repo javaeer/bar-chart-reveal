@@ -194,7 +194,7 @@ function buildV2() {
     // 展示类参数（非 schema 必需，工具自定义扩展）
     theme: 'tech',
     defaultShape: 'bar',
-    revealRatio: 0.72,
+    revealRatio: 0.85,
     durationMs: 9000,
   };
 }
@@ -216,7 +216,7 @@ function build() {
     subtitle: '数据来源：会宁县人民政府官网乡镇概况 · 第七次全国人口普查 · 2025 会宁县统计公报',
     theme: 'tech',
     defaultShape: 'bar',
-    revealRatio: 0.72,
+    revealRatio: 0.85,
     durationMs: 9000,
     views: [
       { key: 'area', label: '行政区域面积', short: '面积', shape: 'cylinder', unit: 'km²', fixed: 0, items: pick('area', 0) },

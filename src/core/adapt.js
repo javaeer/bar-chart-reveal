@@ -180,7 +180,7 @@ export function adaptV2(raw, opts = {}) {
   const idField = asStr(entity.idField).trim() || DEF_ID_FIELD;
   const nameField = asStr(entity.nameField).trim() || DEF_NAME_FIELD;
   if (Array.isArray(entity.groupValues) && entity.groupValues.length) {
-    // 分组仅作元信息：当前 3D 赛跑无分组语义，这里记录一条提示，不参与渲染
+    // 分组仅作元信息：当前 3D 揭示无分组语义，这里记录一条提示，不参与渲染
     warns.push(`模板声明了分组维度(${entity.groupField || 'group'}: ${entity.groupValues.join('/')})，当前渲染不使用分组`);
   }
 

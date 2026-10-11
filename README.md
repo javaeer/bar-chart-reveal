@@ -1,4 +1,4 @@
-# 柱状赛跑 · 配置驱动可视化与出片工具（bar-chart-reveal / bar chart race）
+# 柱状揭示 · 配置驱动可视化与出片工具（bar-chart-reveal）
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![CI](https://github.com/javaeer/bar-chart-reveal/actions/workflows/ci.yml/badge.svg)](https://github.com/javaeer/bar-chart-reveal/actions/workflows/ci.yml) [![Deploy Demo](https://github.com/javaeer/bar-chart-reveal/actions/workflows/deploy-pages.yml/badge.svg)](https://github.com/javaeer/bar-chart-reveal/actions/workflows/deploy-pages.yml)
 
@@ -236,7 +236,7 @@ v2 模板 ──adaptV2 / normalizeConfig──▶ 内部 config ──toV2Templ
 
 | 字段 | 为何无法回写 |
 |---|---|
-| `entity.groupField` / `entity.groupValues` | 当前 3D 赛跑无分组语义，内部不存 |
+| `entity.groupField` / `entity.groupValues` | 当前 3D 揭示无分组语义，内部不存 |
 | `metrics[].valueType` / `scale` / `sortDefault` / `caliber` / `year` / `group` / `description` | 纯元信息，不参与渲染 |
 | `dataset.id` / `dataset.entityLabel` / `dataset.updatedAt` | 内部格式未持有 |
 | `entities[].extra`（如 `redSites` 明细） | 内部格式未持有 |

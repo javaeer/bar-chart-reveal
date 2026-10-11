@@ -141,12 +141,12 @@ const { config: c5 } = normalizeConfig({ views: [{ items: [] }] });
 ok('兜底：items 为空的视图被丢弃', c5.views.length === 0, '');
 
 const { config: c6 } = normalizeConfig({ revealRatio: 'xx', durationMs: -5, views: [] });
-ok('兜底：revealRatio 非法 → 回退 0.72', c6.revealRatio === 0.72, String(c6.revealRatio));
+ok('兜底：revealRatio 非法 → 回退 0.85', c6.revealRatio === 0.85, String(c6.revealRatio));
 // v2.6：durationMs 非法 → 不再硬回退 7200，而是交由 barIntervalMs 推导
-//   （views 为空 → 柱体数量按 1 计；默认间隔 2000 / 0.72 ≈ 2778ms）
+//   （views 为空 → 柱体数量按 1 计；默认间隔 2000 / 0.85 ≈ 2353ms）
 ok(
-  '兜底：durationMs 非法 → 由间隔推导（views 空时 ≈ 2778ms）',
-  c6.durationMs === Math.round(2000 / 0.72),
+  '兜底：durationMs 非法 → 由间隔推导（views 空时 ≈ 2353ms）',
+  c6.durationMs === Math.round(2000 / 0.85),
   String(c6.durationMs),
 );
 
@@ -490,8 +490,8 @@ ok('video：默认间隔为 2000ms', DEFAULT_BAR_INTERVAL_MS === 2000 && INTERVA
   ok('config：barIntervalMs 透传', c1.barIntervalMs === 3000, String(c1.barIntervalMs));
   ok('config：source 透传', c1.source === 'S', c1.source);
   ok('config：notes 过滤空项', c1.notes.length === 2, c1.notes.join('/'));
-  ok('config：未给 durationMs → 由 interval 推导（2×3000/0.72）',
-    c1.durationMs === Math.round(2 * 3000 / 0.72) && c1._durationExplicit === false, String(c1.durationMs));
+  ok('config：未给 durationMs → 由 interval 推导（2×3000/0.85）',
+    c1.durationMs === Math.round(2 * 3000 / 0.85) && c1._durationExplicit === false, String(c1.durationMs));
 }
 {
   const { config: c2 } = normalizeConfig({
@@ -528,7 +528,7 @@ ok('video：默认间隔为 2000ms', DEFAULT_BAR_INTERVAL_MS === 2000 && INTERVA
     metrics: [{ key: 'm', label: 'M' }] };
   const { config: c5 } = normalizeConfig(v2);
   ok('config：v2 模板 aspect 透传', c5.aspect === '1:1', c5.aspect);
-  ok('config：v2 模板 barIntervalMs 透传并推导时长', c5.barIntervalMs === 4000 && c5.durationMs === Math.round(2 * 4000 / 0.72),
+  ok('config：v2 模板 barIntervalMs 透传并推导时长', c5.barIntervalMs === 4000 && c5.durationMs === Math.round(2 * 4000 / 0.85),
     `${c5.barIntervalMs}|${c5.durationMs}`);
   ok('config：v2 模板 source 单独保留（与 subtitle 并存）',
     c5.source === 'SRC' && c5.subtitle.includes('SRC') && c5.notes[0] === 'N1',
@@ -544,8 +544,8 @@ ok('video：默认间隔为 2000ms', DEFAULT_BAR_INTERVAL_MS === 2000 && INTERVA
   // 内置默认数据集带默认画幅与间隔
   ok('默认数据集：aspect 已定义', typeof DEFAULT_CONFIG.aspect === 'string' && !!ASPECTS[DEFAULT_CONFIG.aspect], DEFAULT_CONFIG.aspect);
   ok('默认数据集：barIntervalMs 已定义', DEFAULT_CONFIG.barIntervalMs === 2000, String(DEFAULT_CONFIG.barIntervalMs));
-  ok('默认数据集：总时长由间隔推导（28 项 × 2000 / 0.72）',
-    DEFAULT_CONFIG.durationMs === Math.round(28 * 2000 / 0.72), String(DEFAULT_CONFIG.durationMs));
+  ok('默认数据集：总时长由间隔推导（28 项 × 2000 / 0.85）',
+    DEFAULT_CONFIG.durationMs === Math.round(28 * 2000 / 0.85), String(DEFAULT_CONFIG.durationMs));
 }
 {
   // v2.7.1 信息层：buildOverlayModel 的 portrait 口径 = 取景框 w/h < 1

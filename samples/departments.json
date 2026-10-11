@@ -4,7 +4,7 @@
   "theme": "aurora",
   "defaultShape": "bar",
   "highlightLabel": "明星部门",
-  "revealRatio": 0.72,
+  "revealRatio": 0.85,
   "durationMs": 7200,
   "views": [
     {

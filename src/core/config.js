@@ -67,7 +67,12 @@ const DEFAULTS = {
   notes: [],
   theme: 'tech',
   highlightLabel: '重点',
-  revealRatio: 0.72,
+  // v2.10.1：revealRatio 默认 0.72 → 0.85（Bug2 主杠杆）
+  //   旧值 0.72 把总时长 28% 留给尾部相机拉远，柱多（长视频）时尾段慢推拖沓 10~20s；
+  //   0.85 把尾部压缩到 15% 以内，再叠加 computeFrame 里 ~3s 目标时长的相机过渡，
+  //   既利落又保证视频连贯（smoothstep 两端零速度）。注意下方 normalizeConfig 的
+  //   revealRatio 回退也用 DEFAULTS.revealRatio —— 两者必须同步，否则此默认值失效。
+  revealRatio: 0.85,
   durationMs: 7200,
   barIntervalMs: DEFAULT_BAR_INTERVAL_MS,
   aspect: DEFAULT_ASPECT,
@@ -112,10 +117,10 @@ export function normalizeConfig(raw, opts = {}) {
     notes: [],
     theme: 'tech',
     highlightLabel: '重点',
-    revealRatio: 0.72,
-    durationMs: 7200,
-    barIntervalMs: DEFAULT_BAR_INTERVAL_MS,
-    // durationExplicit 是「内部标记」：表示 durationMs 由用户显式指定，
+  revealRatio: 0.85,
+  durationMs: 7200,
+  barIntervalMs: DEFAULT_BAR_INTERVAL_MS,
+  // durationExplicit 是「内部标记」：表示 durationMs 由用户显式指定，
     // 因此不被 barIntervalMs 推导覆盖（保持老配置的行为完全不变）。
     _durationExplicit: false,
     aspect: DEFAULT_ASPECT,
@@ -154,7 +159,7 @@ export function normalizeConfig(raw, opts = {}) {
   // —— revealRatio（0..1，clamp）——
   let rr = Number(raw.revealRatio);
   if (!Number.isFinite(rr)) {
-    warns.push(`revealRatio 非法(${raw.revealRatio})，回退默认 0.72`);
+    warns.push(`revealRatio 非法(${raw.revealRatio})，回退默认 0.85`);
     rr = DEFAULTS.revealRatio;
   }
   out.revealRatio = Math.min(1, Math.max(0.05, rr));
@@ -365,7 +370,7 @@ export const SAMPLE_CONFIGS = {
     subtitle: '示例/合成数据 · 用于演示工具通用性',
     theme: 'aurora',
     highlightLabel: '明星部门',
-    revealRatio: 0.72,
+    revealRatio: 0.85,
     durationMs: 7200,
     views: [
       {
@@ -417,7 +422,7 @@ export const SAMPLE_CONFIGS = {
     subtitle: '近似值 · 用于演示工具通用性（数据取自公开科普资料，非精密测量值）',
     theme: 'sunset',
     highlightLabel: '地球',
-    revealRatio: 0.72,
+    revealRatio: 0.85,
     durationMs: 7200,
     views: [
       {

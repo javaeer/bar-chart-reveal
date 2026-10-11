@@ -559,7 +559,7 @@ export const HUINING_V2 = {
   ],
   "theme": "tech",
   "defaultShape": "bar",
-  "revealRatio": 0.72
+  "revealRatio": 0.85
 };
 
 export default HUINING_V2;

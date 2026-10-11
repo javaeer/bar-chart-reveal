@@ -130,15 +130,19 @@ const TAIL_JUMP_LIMIT = 0.05; // t=reveal 处单帧跃变量上限（修复前 6
 
     // ══════════ ③ 尾部过渡：cx 单调趋 0 + 无阶跃 + 二阶差分有界 ══════════
     console.log('\n───── ③ 尾部过渡平滑性 ─────');
-    await page.goto(`${srv.base}/?view=population&debug=1&t=0.72`, { waitUntil: 'load' });
+    await page.goto(`${srv.base}/?view=population&debug=1`, { waitUntil: 'load' });
     await sleep(2600);
     const traj = await page.evaluate(() => {
       const c = window.__barRace;
       if (!c || typeof c.beginRecord !== 'function') return null;
+      // v2.10.1：revealRatio 默认已上调（0.72→0.85），尾部窗口随之右移，
+      // 故采样用真实 reveal（从配置读取）而非写死 0.72，避免误采样跟随段。
+      const rr = (window.__barRaceDS && window.__barRaceDS.getConfig().revealRatio) || 0.85;
       c.beginRecord();
       const out = [];
-      for (let i = 0; i <= 280; i++) {
-        const t = 0.72 + (0.28 * i) / 280;   // 步长 0.001
+      const N = 280;
+      for (let i = 0; i <= N; i++) {
+        const t = rr + ((1 - rr) * i) / N;   // 真实尾部窗口 [reveal, 1]，步长 (1-reveal)/280
         const f = c.renderAt(t);
         out.push({ t: +t.toFixed(4), cx: f && f.camera ? f.camera.center[0] : null });
       }

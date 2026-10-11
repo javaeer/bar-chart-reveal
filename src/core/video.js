@@ -116,7 +116,7 @@ export const INTERVAL_MAX = 20000;           // 上限 20s（再慢没人等）
  * @param {number} revealRatio  揭示阶段占比（0..1）
  * @returns {number} 总时长 ms（正整数，且不小于揭示耗时）
  */
-export function deriveDuration(n, intervalMs = DEFAULT_BAR_INTERVAL_MS, revealRatio = 0.72) {
+export function deriveDuration(n, intervalMs = DEFAULT_BAR_INTERVAL_MS, revealRatio = 0.85) {
   const count = Number.isFinite(Number(n)) && Number(n) > 0 ? Math.floor(Number(n)) : 1;
   let iv = Number(intervalMs);
   if (!Number.isFinite(iv) || iv <= 0) iv = DEFAULT_BAR_INTERVAL_MS;
@@ -132,7 +132,7 @@ export function deriveDuration(n, intervalMs = DEFAULT_BAR_INTERVAL_MS, revealRa
  * 由总时长反推「每根柱子间隔」（互逆换算，供 UI 双向联动）。
  * 与 deriveDuration 保持一致：interval = duration × revealRatio / n。
  */
-export function intervalFromDuration(durationMs, n, revealRatio = 0.72) {
+export function intervalFromDuration(durationMs, n, revealRatio = 0.85) {
   const d = Number(durationMs);
   const count = Number.isFinite(Number(n)) && Number(n) > 0 ? Math.floor(Number(n)) : 1;
   let rr = Number(revealRatio);

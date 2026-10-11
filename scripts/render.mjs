@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 出片 CLI（SPEC 第 6 节）：配置驱动的 3D 柱状赛跑 → MP4
+// 出片 CLI（SPEC 第 6 节）：配置驱动的 3D 柱状揭示 → MP4
 //
 // 用法：
 //   node scripts/render.mjs --config samples/huining-v2.json [--view area] [--theme tech] \

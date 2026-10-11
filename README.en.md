@@ -1,6 +1,6 @@
-# bar-chart-reveal (bar chart race)
+# bar-chart-reveal
 
-> Config-driven 3D bar-chart-race visualization & video exporter.
+> Config-driven 3D bar-chart-reveal visualization & video exporter.
 > Any dataset (`[{name, value, highlight?}]`) + any theme + any title →
 > **in-browser animation preview** and **CLI export to MP4**.
 > Not limited to one dataset: company departments, planet parameters, or any

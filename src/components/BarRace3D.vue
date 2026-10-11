@@ -17,7 +17,7 @@ const props = defineProps({
   unit: { type: String, default: '' },
   fixed: { type: Number, default: 0 },
   theme: { type: Object, default: null }, // getTheme() 归一化后的主题（内部会再兜底归一化）
-  reveal: { type: Number, default: 0.72 },
+  reveal: { type: Number, default: 0.85 }, // 与 config.DEFAULTS.revealRatio 同步（Bug2 主杠杆）
   duration: { type: Number, default: 7200 }, // ms
   captureT: { type: Number, default: null }, // 非 null：确定性单帧（截图模式）
   shape: { type: String, default: 'bar' },   // bar|cube|rounded|cylinder|sphere
@@ -170,6 +170,32 @@ function cylData(cx, cy, r, h, segU = CYL_SEG_U, segV = CYL_SEG_V) {
   }
   return out;
 }
+// 球体几何（surface 参数化网格，与圆柱同机制；真实 3D 球面 + lambert 光照）。
+// 输入：cxData = 柱心在 xAxis3D 的**数据坐标**（与 bar3D value[0] 同一坐标系）；
+//       Rworld = 当前世界半径（已含生长 + 广角补偿）；worldMaxH = 箱体的世界高度
+//       （= boxH / (ZMAX·boostK)），用于把世界 z 折算成 zAxis3D 的**数据坐标**。
+// 关键：x/y 方向 1 世界单位 = 1/S 数据单位（各向同性）；z 方向 1 世界单位
+//       = 1/worldMaxH 数据单位。为保证球面在世界空间里是正圆（而非被 z 轴
+//       压缩成椭球），必须用**同一世界→数据因子**对三个维度补偿：x/y 用 /S，
+//       z 用 /worldMaxH。球心抬到世界高度 Rworld ⇒ 底部贴地（z=0）、顶部在世界 2·Rworld。
+function sphereData(cxData, Rworld, worldMaxH, segU = SPHERE_SEG_U, segV = SPHERE_SEG_V) {
+  const out = [];
+  const rx = Rworld / S;          // x/y 方向半径（数据单位）
+  const rz = Rworld / worldMaxH;  // z 方向半径（数据单位，独立补偿以保正圆）
+  for (let j = 0; j <= segV; j++) {
+    const v = j / segV;
+    const phi = v * Math.PI;       // 0（底）→ π（顶）
+    const sinP = Math.sin(phi), cosP = Math.cos(phi);
+    for (let i = 0; i <= segU; i++) {
+      const u = i / segU, th = u * Math.PI * 2;
+      const x = cxData + rx * sinP * Math.cos(th);
+      const y = rx * sinP * Math.sin(th);
+      const z = rz * (1 + cosP);    // 球心在 rz ⇒ 底 0、顶 2·rz（世界意义：底 0、顶 2·Rworld）
+      out.push([x, y, z, u, v]);
+    }
+  }
+  return out;
+}
 // 圆的包围盒刻度：surface 走 grid3D 的 x/y 轴数据范围。
 // ★ 各向同性校验（圆柱不被压扁的前提）：
 //   xAxis3D 数据范围 = [-span/2-xPad, span/2+xPad]，跨度 = span+2·xPad = xRange；
@@ -217,6 +243,15 @@ const SPHERE_WIDE_FILL = 0.20;
 // 球体注视点抬升系数（× 可视高）：把球群从"画面偏上"推到"中下部"（见 cyWide 处注释）。
 // 实测（1280×720）：0.30 时 n=28/n=14 球群分别稳定落在 ~57%/~58% 屏高。
 const SPHERE_GAZE_K = 0.30;
+// 真实 3D 球在广角（wide）阶段随相机拉远而自然缩小。为让收尾"全展示"画面里
+// 球群依然饱满醒目，按尾部进度 us 把球半径从 1 渐增到该系数。
+// v2.10.1：旧值 2.8 → 3.8。2.8 时 n=28 全景最大球仅 ~25px（一排细珠，呼应"球体效果惨不忍睹"）；
+// 3.8 使最大球半径 ≈ 1.05×3.8≈4.0 世界（直径≈8≈步距，球群首尾相抵而不相互吞没），
+// 1280×720 下 ≈34px，清晰成"球"且立体可辨。半宽按未增强半径拟合，故边缘球仅轻微出画（~10px），可接受。
+const SPHERE_WIDE_BOOST_NEW = 3.8;
+// 球面网格分辨率（经/纬分段）：足够圆润，顶点数可控（每球 ≈ (28+1)×(20+1)）。
+const SPHERE_SEG_U = 28;
+const SPHERE_SEG_V = 20;
 
 // —— 标签字体（单一真源）——
 // 中文字体必须显式声明：无头环境下 font-family 若解析到不含中文字形的字体，
@@ -555,6 +590,12 @@ function computeFrame(tRaw) {
       value: [x, 0, z],
       sphereValue: [x, 0, sphereY], // scatter3D 坐标：[x, 深度(0), 高度] —— 高度同样落在 zAxis3D，与 bar3D 同轴
       sphereR,
+      sphereRworld: sphereR,
+      // ★ 球体生长半径当前值：每帧初始化为"已生长半径 sphereR"（贴地弹出时从 0 长起），
+      //   尾段（t>reveal）再乘 sBoost 放大。必须每帧赋值 —— 否则揭示期 sphereRworldCur
+      //   为 undefined，buildOption 的球体过滤 (sphereRworldCur>0.0005) 会把生长中的球全部滤掉，
+      //   表现为"重播/切换形状后球体要到最后才会突然冒出来"（Bug 1 球体分支回归）。
+      sphereRworldCur: sphereR,
       symbolSize: symbolSizeFinal,
       real: v,
       ratio,
@@ -830,10 +871,34 @@ function computeFrame(tRaw) {
   //     ② 起点冻结 → 凝视点求值改用 tGaze = min(t, reveal)（见上方 tGaze 处），
   //        使 `t>reveal` 时 cxFollowFinal ≡ C（常量）⇒ cx = lerp(C, 0, us) 严格单调、
   //        无过冲，速度 = C·us'，两端均为 0（smoothstep 的端点导数性质）。
+  // ★ Bug2 修复：尾部（跟随→全景）相机过渡改为「目标绝对时长」，不再随总时长
+  //   线性拉长——长视频（柱多）尾段不再慢推拖沓。reveal 已默认上调（config.js
+  //   revealRatio 0.72→0.85），此处再把"相机拉远"这一小段压缩到 ~3s 量级，
+  //   余下时间稳定停在全景（展示全部），既利落又保证视频连贯（smoothstep 两端零速度）。
+  // —— 尾部（跟随→全景）拆为两段，均按「目标绝对时长」计算，不随总时长线性拉长 ——
+  //   Bug2 根因：旧版尾部 = (1-reveal)·totalMs，长视频（柱多）可达十余秒的慢推 + 静态展示过久。
+  //   · drift（相机拉远过渡）：目标 ~3s，clamp 到 [DRIFT_MIN, DRIFT_MAX]，smoothstep 两端零速度保连贯；
+  //   · hold（稳定全景、展示全部）：= 预算 - drift，显式夹到 [HOLD_MIN, HOLD_MAX]，
+  //     防长视频静态展示过久（呼应"展示全部时耗时太长"）。reveal 已默认上调（config 0.72→0.85），
+  //     尾部总预算收窄，两段更易落入理想区间；即便极低 reveal，drift 也被夹住，慢推不会失控。
+  const TAIL_DRIFT_SEC = 3.0;
+  const DRIFT_MIN = 0.03, DRIFT_MAX = 0.12;
+  const HOLD_MIN = 0.02, HOLD_MAX = 0.12;
+  const budget = Math.max(0.05, 1 - reveal);            // 尾部总预算 = 1 - reveal
+  let driftFrac = clamp((TAIL_DRIFT_SEC * 1000) / Math.max(totalMs, 1), DRIFT_MIN, DRIFT_MAX);
+  let holdFrac = clamp(budget - driftFrac, HOLD_MIN, HOLD_MAX);
+  driftFrac = clamp(budget - holdFrac, DRIFT_MIN, DRIFT_MAX); // 反推 drift，使 hold 落在目标区间（极低 reveal 时优先保 hold）
   const inTail = t > reveal;
-  const u = inTail ? clamp((t - reveal) / (1 - reveal), 0, 1) : 0;
+  const u = inTail ? clamp((t - reveal) / Math.max(driftFrac, 1e-6), 0, 1) : 0;
   // smoothstep：S(u)=3u²-2u³，S(0)=0、S'(0)=0、S(1)=1、S'(1)=0 —— 两端零速度。
   const us = u * u * (3 - 2 * u);
+  // 球体广角补偿：真实 3D 球随相机拉远而缩小，按尾部进度 us 把半径渐增到
+  // SPHERE_WIDE_BOOST_NEW，使收尾"全展示"画面里球群依然饱满。同步施加到所有球。
+  if (isSphere(props.shape)) {
+    const sBoost = lerp(1, SPHERE_WIDE_BOOST_NEW, us);
+    // 乘到每帧已初始化的 sphereRworldCur 上（揭示期 = 已生长半径，尾段渐放 ≈ 饱满构图）
+    for (const b of bars) b.sphereRworldCur = (b.sphereRworldCur != null ? b.sphereRworldCur : (b.sphereRworld || 0)) * sBoost;
+  }
   // alpha/beta/distance/cy 的过渡无历史包袱（跟随期本为常量），沿用 easeInOut 亦可，
   // 但为与 cx 同步（同一 u、同一观感曲线）统一改用 smoothstep。
   let alpha = inTail ? lerp(alphaFollow, ALPHA_WIDE, us) : alphaFollow;
@@ -874,6 +939,8 @@ function computeFrame(tRaw) {
     barD: barD * boostK,
     xPad,
     shape, sphereWorldMinR, sphereWorldMaxR, pxPerWorldY,
+    // 球体专属：箱体世界高度（未含 boost），供 sphereData 把世界 z 折算成数据坐标。
+    worldMaxHBase: isSphere(props.shape) ? Math.min(worldMaxH, worldMaxHSphere) : worldMaxH,
   };
 }
 
@@ -984,69 +1051,55 @@ function buildOption(f) {
   };
 
   if (sphere) {
-    // —— 球体：scatter3D 四层同心叠加（伪立体）——
-    // scatter3D 的符号是恒正对相机的贴片，无光照 → 单层只是扁圆点。四层同中心叠加，
-    // 形成"外圈暗辉光 → 本色球体 → 略亮过渡 → 中心近白高光"的径向明暗梯度：
-    //   ① glow  环境光晕：大一圈、低透明、同色（lighter）→ 边缘"透光"辉光；
-    //   ② main  主体球：本色实心 → 球体本体（提供清晰边界）；
-    //   ③ mid   过渡层  ：0.78×、本色微提亮 → 抹掉 main/spec 之间的硬边，让明暗连续；
-    //   ④ spec  高光芯  ：0.40×、近白 → 受光高光，是"球体感"的视觉核心。
-    // 生长动画：各层 symbolSize 同步由 0→目标（见 computeFrame 的 local 因子）。
-    // 【为什么不用偏移高光】perspective + billboard 贴片下，靠世界坐标偏移把高光放到
-    //   球面特定位置极不稳定（X 步距=1.0 世界单位、球半径≈1.0，偏移稍大就飞出球外，
-    //   实测出现"灰点悬浮在球上方"）。改走"同心明暗"——几何与球体完全锁定，
-    //   任何视角/缩放都稳，明暗过渡天然模拟球面受光。
-    const shownBars = f.bars.filter((b) => b.shown);
-    const sz = (b, k) => Math.max(b.symbolSize * k, 2);
-    glowSeries = {
-      type: 'scatter3D',
-      name: 'glow',
-      symbol: 'circle',
+    // —— 球体：真实 3D 球面（surface 参数化网格 + lambert 光照）——
+    // 摒弃旧版 scatter3D 四层同心贴片（billboard 永远正对相机、无光照，观感是
+    //   "扁圆光斑"而非球体，正是"球体效果惨不忍睹"的根因）。每球是一张 UV 球面
+    //   网格，随生长由 0 半径拔地而起；lambert 光照自然产生明暗与高光，立体感真实。
+    //   · main        主体球：本色 + lambert 着色（受光面亮、背光面暗）；
+    //   · glow        环境光晕：略大一圈、低透明本色，边缘辉光（普通混合，
+    //               避免旧版 lighter 叠加的"过曝白圈"）；
+    //   · labelCarrier  隐形 scatter3D：承载标签（surface 不支持逐项标签，与圆柱同思路）。
+    const shownBars = f.bars.filter((b) => b.shown && (b.sphereRworldCur || 0) > 0.0005);
+    const wmh = Math.max(f.worldMaxHBase || worldMaxH, 1e-6);
+    const mainSpheres = shownBars.map((b) => ({
+      type: 'surface',
+      name: `sphere_${b.name}`,
+      parametric: true,
+      shading: 'lambert',
+      wireframe: { show: false },
       silent: true,
-      label: { show: false },
-      blendMode: 'lighter', // 叠加发光
-      itemStyle: { opacity: 0.16 },
-      data: shownBars.map((b) => ({
-        value: b.sphereValue,
-        symbolSize: Math.min(b.symbolSize * SPHERE_ATMO_K, SPHERE_PX_MAX + 20),
-        itemStyle: { color: rgbStr(b.color), opacity: 0.16 },
-      })),
-    };
-    mainSeries = {
+      itemStyle: { color: rgbStr(b.color), opacity: 1 },
+      data: sphereData(b.worldX, b.sphereRworldCur || 0, wmh),
+    }));
+    const glowSpheres = shownBars.map((b) => ({
+      type: 'surface',
+      name: `glow_${b.name}`,
+      parametric: true,
+      shading: 'lambert',
+      wireframe: { show: false },
+      silent: true,
+      itemStyle: { color: rgbStr(b.color), opacity: 0.12 },
+      data: sphereData(b.worldX, (b.sphereRworldCur || 0) * 1.16, wmh),
+    }));
+    const labelCarrier = {
       type: 'scatter3D',
-      name: 'main',
+      name: 'labelCarrier',
       symbol: 'circle',
-      data: shownBars.map(mkItem),
+      symbolSize: 1,
+      silent: true,
+      itemStyle: { opacity: 0 },
+      // 标签落点：球顶正上方（data z = 2·R / worldMaxH）
+      data: shownBars.map((b) => ({
+        name: b.name,
+        value: [b.worldX, 0, ((b.sphereRworldCur || 0) * 2) / wmh],
+        itemStyle: { opacity: 0 },
+        label: b.showLabel ? { show: true, formatter: b.labelText } : { show: false },
+      })),
       label: labelStyle,
-      itemStyle: { opacity: 1 },
-      emphasis: { itemStyle: { opacity: 1 } },
     };
-    midSeries = {
-      type: 'scatter3D',
-      name: 'mid',
-      symbol: 'circle',
-      silent: true,
-      label: { show: false },
-      blendMode: 'lighter',
-      data: shownBars.map((b) => ({
-        value: b.sphereValue, // 与主体同心同高
-        symbolSize: sz(b, SPHERE_MID_K),
-        itemStyle: { color: rgbStr(mixWhite(b.color, 0.22)), opacity: 0.34 },
-      })),
-    };
-    specSeries = {
-      type: 'scatter3D',
-      name: 'spec',
-      symbol: 'circle',
-      silent: true,
-      label: { show: false },
-      blendMode: 'lighter',
-      data: shownBars.map((b) => ({
-        value: b.sphereValue, // 与主体同心同高
-        symbolSize: sz(b, SPHERE_CORE_K),
-        itemStyle: { color: '#f2ffff', opacity: 0.42 },
-      })),
-    };
+    // 借 cylSeriesHolder 通道整体挂载（见 series 组装处，已兼容 mainSeries 为空）
+    cylSeriesHolder = [...glowSpheres, ...mainSpheres, labelCarrier];
+    glowSeries = null; mainSeries = null; midSeries = null; specSeries = null;
   } else if (isCylinder(f.shape)) {
     // —— 真圆柱：surface 参数化（每根柱子一个 surface 系列）——
     // 【为什么不用 bar3D】见 SHAPE_GEOM 处注释：bar3D 的 bevel 会同时圆化端面，
@@ -1172,8 +1225,9 @@ function buildOption(f) {
     yAxis3D: { type: 'value', min: -0.85, max: 0.85, ...axes },
     zAxis3D: { type: 'value', min: 0, max: ZMAX, ...axes },
     series: cylSeriesHolder
-      // 圆柱模式：surface 系列 + 透明的标签承载系列
-      ? [...cylSeriesHolder, mainSeries]
+      // 圆柱 / 球体模式：surface 系列 + 透明标签承载系列整体经 cylSeriesHolder 通道挂载。
+      // 球体模式下 mainSeries 为 null —— 此时不得向数组追加 null，否则整组系列渲染失败。
+      ? (mainSeries ? [...cylSeriesHolder, mainSeries] : cylSeriesHolder)
       : (specSeries
         ? [glowSeries, mainSeries, midSeries, specSeries]
         : [glowSeries, mainSeries]),

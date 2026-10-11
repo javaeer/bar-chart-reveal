@@ -4,7 +4,7 @@
   "theme": "sunset",
   "defaultShape": "sphere",
   "highlightLabel": "地球",
-  "revealRatio": 0.72,
+  "revealRatio": 0.85,
   "durationMs": 7200,
   "views": [
     {
