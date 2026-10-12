@@ -1,0 +1,20 @@
+# 自动归一化文本行尾为 LF，避免跨平台差异
+* text=auto eol=lf
+
+# 二进制资源：禁用文本转换与 diff
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.ico binary
+*.mp4 binary
+*.webm binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+
+# 生成的构建产物：标记为 generated，不计入语言统计
+/dist linguist-generated
+/dist-single linguist-generated

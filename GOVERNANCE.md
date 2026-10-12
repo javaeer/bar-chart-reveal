@@ -47,4 +47,4 @@
   配置格式的 breaking change；`major` 才允许破坏兼容。
 - 发布由 tag（`v*`）触发，见 `.github/workflows/release.yml`；不使用自动化改写 CHANGELOG 的工具
   （保留手写 [CHANGELOG.md](CHANGELOG.md) 的可读性）。
-- 赞助 / 资金支持：见 `.github/FUNDING.yml`（如启用）。
+- 赞助 / 资金支持：见 [.github/FUNDING.yml](.github/FUNDING.yml)。

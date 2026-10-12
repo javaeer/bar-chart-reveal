@@ -4,6 +4,38 @@
   "description": "配置驱动的 3D 柱状揭示可视化与出片工具（Vue3 + ECharts-GL，任意数据集/主题/标题/形状）",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/javaeer/bar-chart-reveal.git"
+  },
+  "homepage": "https://javaeer.github.io/bar-chart-reveal/",
+  "bugs": {
+    "url": "https://github.com/javaeer/bar-chart-reveal/issues"
+  },
+  "author": "javaeer",
+  "keywords": [
+    "bar-chart-race",
+    "bar-chart-reveal",
+    "3d-visualization",
+    "echarts-gl",
+    "vue3",
+    "data-visualization",
+    "animated-chart",
+    "video-generation"
+  ],
+  "files": [
+    "src",
+    "scripts",
+    "samples",
+    "docs",
+    "dist",
+    "index.html",
+    "vite.config.js",
+    "README.md",
+    "README.en.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "engines": {
     "node": ">=18"
   },

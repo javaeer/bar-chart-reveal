@@ -1,0 +1,118 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://javaeer.github.io/bar-chart-reveal/schema/config-v2.schema.json",
+  "title": "Bar Chart Reveal 数据集模板 v2",
+  "description": "配置驱动的 3D 柱状揭示可视化工具的 v2 数据模板。用于在 VSCode 中编辑 samples/*.json 时获得自动补全与校验。详见 docs/data-template-v2.md。",
+  "type": "object",
+  "required": ["dataset", "entity", "metrics", "entities"],
+  "additionalProperties": true,
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "description": "模板版本号，仅用于判别格式，不参与渲染。",
+      "default": "1.0"
+    },
+    "dataset": {
+      "type": "object",
+      "required": ["id", "name"],
+      "additionalProperties": true,
+      "properties": {
+        "id": { "type": "string", "description": "数据集唯一标识。" },
+        "name": { "type": "string", "description": "数据集名称，映射为图表主标题。" },
+        "entityLabel": { "type": "string", "description": "对象维度中文名（如「乡镇」「部门」）。" },
+        "source": { "type": "string", "description": "数据来源，进入副标题。" },
+        "updatedAt": { "type": "string", "description": "数据更新时间，自由文本。" },
+        "highlightEntityId": {
+          "type": "string",
+          "description": "高亮主角的实体 id（也可用显示名匹配）。"
+        },
+        "notes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "补充说明，与 source 以「 · 」连接进入副标题。"
+        }
+      }
+    },
+    "entity": {
+      "type": "object",
+      "required": ["idField", "nameField"],
+      "additionalProperties": true,
+      "properties": {
+        "idField": { "type": "string", "default": "id" },
+        "nameField": { "type": "string", "default": "name" },
+        "groupField": { "type": "string", "default": "group" },
+        "groupValues": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "分组取值白名单（如「镇」「乡」）。"
+        }
+      }
+    },
+    "metrics": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["key", "label"],
+        "additionalProperties": true,
+        "properties": {
+          "key": { "type": "string", "description": "指标键，对应 entities[].metrics 的键。" },
+          "label": { "type": "string", "description": "指标显示名。" },
+          "short": { "type": "string", "description": "轴上短标签（可选，覆盖 label）。" },
+          "unit": { "type": "string", "description": "单位（如「人」「km²」）。" },
+          "valueType": { "type": "string", "enum": ["integer", "number"], "default": "number" },
+          "decimals": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 6,
+            "description": "小数位，夹紧至 [0,6]，非法回退 0。"
+          },
+          "scale": { "type": "number", "default": 1 },
+          "sortDefault": { "type": "string", "enum": ["asc", "desc"] },
+          "defaultVisible": { "type": "boolean", "default": true },
+          "enabled": { "type": "boolean", "default": true, "description": "false 表示数据不可用，默认整视图跳过。" },
+          "group": { "type": "string", "description": "指标分组（如「规模」「地理」）。" },
+          "caliber": { "type": "string", "description": "口径说明。" },
+          "year": { "type": ["integer", "null"] },
+          "shape": { "type": "string", "enum": ["bar", "cylinder", "sphere"], "description": "覆盖顶层 defaultShape。" },
+          "missingPolicy": {
+            "type": "string",
+            "enum": ["skip", "zero", "disable"],
+            "default": "skip",
+            "description": "skip=缺值不产出条目；zero=补 0 保留；disable=任一缺值则整视图跳过。"
+          },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "entities": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "metrics"],
+        "additionalProperties": true,
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "group": { "type": "string" },
+          "metrics": {
+            "type": "object",
+            "description": "指标键值对；值为数字、null（缺失）或字符串。",
+            "additionalProperties": { "type": ["number", "null", "string"] }
+          },
+          "extra": { "type": "object", "description": "附加信息（如 redSites 列表），不参与渲染。" }
+        }
+      }
+    },
+    "theme": { "type": "string", "description": "配色主题（如 tech）。" },
+    "defaultShape": { "type": "string", "enum": ["bar", "cylinder", "sphere"] },
+    "revealRatio": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "揭示段占视频总时长比例。"
+    },
+    "durationMs": { "type": "integer", "minimum": 1, "description": "单视图时长（毫秒）。" }
+  }
+}
